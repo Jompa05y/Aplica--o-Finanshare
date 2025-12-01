@@ -1,0 +1,135 @@
+import React, { useState, useEffect, useCallback } from "react";
+import { useLocation, useNavigate, Link } from "react-router-dom";
+import { Goal } from "@/entities/Goal";
+import { Contribution } from "@/entities/Contribution";
+import { User } from "@/entities/User";
+import { createPageUrl } from "@/utils";
+import { ArrowLeft, Plus, Calendar, Users, Target, CheckCircle, Trash2, Edit } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
+import { useToast } from "@/components/ui/use-toast";
+import { format, differenceInDays } from "date-fns";
+import { ptBR } from "date-fns/locale";
+
+export default function GoalDetail() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { toast } = useToast();
+  const [goal, setGoal] = useState(null);
+  const [contributions, setContributions] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const loadData = useCallback(async (goalId) => {
+    setIsLoading(true);
+    try {
+      const goalData = await Goal.get(goalId);
+      setGoal(goalData);
+      const contributionData = await Contribution.filter({ goal_id: goalId }, "-date");
+      setContributions(contributionData);
+    } catch (error) {
+      toast({ title: "Erro", description: "Não foi possível carregar os dados da meta.", variant: "destructive" });
+      navigate(createPageUrl("Goals"));
+    }
+    setIsLoading(false);
+  }, [navigate, toast]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const goalId = params.get("id");
+    if (goalId) {
+      loadData(goalId);
+    }
+  }, [location.search, loadData]);
+
+  if (isLoading) return <div className="p-4 max-w-md mx-auto">Carregando detalhes da meta...</div>;
+  if (!goal) return <div className="p-4 max-w-md mx-auto">Meta não encontrada.</div>;
+
+  const progress = Math.min((goal.current_amount / goal.target_amount) * 100, 100);
+  const daysRemaining = goal.deadline ? differenceInDays(new Date(goal.deadline), new Date()) : null;
+
+  return (
+    <div className="p-4 max-w-md mx-auto">
+      <div className="flex items-center gap-4 mb-6">
+        <Button variant="ghost" size="icon" onClick={() => navigate(createPageUrl("Goals"))}>
+          <ArrowLeft className="w-5 h-5" />
+        </Button>
+        <div className="flex-1">
+          <h1 className="text-xl font-bold text-gray-800 truncate">{goal.name}</h1>
+          <p className="text-sm text-gray-600 truncate">{goal.description || "Detalhes da sua meta"}</p>
+        </div>
+        <Link to={createPageUrl(`AddContribution?goalId=${goal.id}`)}>
+          <Button size="sm"><Plus className="w-4 h-4 mr-2"/>Adicionar</Button>
+        </Link>
+      </div>
+
+      <div className="space-y-6">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex justify-between items-center">
+              <span>Progresso</span>
+              <span className="text-emerald-600 font-bold">{progress.toFixed(1)}%</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Progress value={progress} className="h-3 mb-2" />
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-600">R$ {goal.current_amount.toLocaleString('pt-BR')}</span>
+              <span className="font-medium">R$ {goal.target_amount.toLocaleString('pt-BR')}</span>
+            </div>
+            {goal.deadline && (
+              <div className="flex items-center gap-2 mt-4 text-sm text-gray-500">
+                <Calendar className="w-4 h-4" />
+                {daysRemaining >= 0 ? `Faltam ${daysRemaining} dias` : `Vencida há ${Math.abs(daysRemaining)} dias`}
+                ({format(new Date(goal.deadline), "dd/MM/yyyy")})
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {goal.type === 'group' && (
+            <Card>
+                <CardHeader><CardTitle>Contribuições do Grupo</CardTitle></CardHeader>
+                <CardContent>
+                    <div className="space-y-2">
+                        {goal.participants?.map(p => (
+                            <div key={p.email}>
+                                <div className="flex justify-between text-sm mb-1">
+                                    <span>{p.name}</span>
+                                    <span>R$ {p.contributed.toLocaleString('pt-BR')}</span>
+                                </div>
+                                <Progress value={(p.contributed / goal.target_amount) * 100} className="h-1.5" />
+                            </div>
+                        ))}
+                    </div>
+                </CardContent>
+            </Card>
+        )}
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Histórico de Contribuições</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {contributions.length > 0 ? (
+              <div className="space-y-3">
+                {contributions.map(c => (
+                  <div key={c.id} className="flex justify-between items-center p-2 bg-gray-50 rounded-md">
+                    <div>
+                      <p className="font-medium text-sm">{c.contributor_name || c.contributor_email}</p>
+                      <p className="text-xs text-gray-500">{format(new Date(c.date), "dd/MM/yyyy")}</p>
+                    </div>
+                    <p className="font-bold text-green-600">+ R$ {c.amount.toLocaleString('pt-BR')}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-center text-gray-500 py-4">Nenhuma contribuição ainda.</p>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}

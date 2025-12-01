@@ -1,0 +1,362 @@
+
+import React, { useState, useEffect, useRef } from "react";
+import { User } from "@/entities/User";
+import { Expense } from "@/entities/Expense";
+import { Group } from "@/entities/Group";
+import { UploadFile } from "@/integrations/Core"; // Importação para upload
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { 
+  User2, 
+  Mail, 
+  Calendar, 
+  Target, 
+  Settings, 
+  LogOut,
+  Save,
+  Edit3,
+  TrendingUp,
+  Users,
+  Wallet,
+  Camera // Ícone da câmera
+} from "lucide-react";
+import { format } from "date-fns";
+import { ptBR } from "date-fns/locale";
+import { useToast } from "@/components/ui/use-toast"; // Import toast
+
+export default function Profile() {
+  const [user, setUser] = useState(null);
+  const [stats, setStats] = useState({
+    totalExpenses: 0,
+    totalGroups: 0,
+    monthlyAverage: 0
+  });
+  const [isEditing, setIsEditing] = useState(false);
+  const [editData, setEditData] = useState({
+    monthly_budget: "",
+    savings_goal: "",
+    notifications_enabled: true
+  });
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isUploading, setIsUploading] = useState(false); // State para upload
+  const fileInputRef = useRef(null); // Ref para o input de arquivo
+  const { toast } = useToast();
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const loadData = async () => {
+    const userData = await User.me();
+    setUser(userData);
+    setEditData({
+      monthly_budget: userData.monthly_budget || "",
+      savings_goal: userData.savings_goal || "",
+      notifications_enabled: userData.notifications_enabled !== false
+    });
+
+    // Carregar estatísticas
+    const userExpenses = await Expense.filter({ created_by: userData.email });
+    const totalExpenses = userExpenses.reduce((sum, exp) => sum + (exp.amount || 0), 0);
+    
+    const adminGroups = await Group.filter({ admin_email: userData.email });
+    const allGroups = await Group.list();
+    const memberGroups = allGroups.filter(group => 
+      group.members?.some(member => member.email === userData.email)
+    );
+    const totalGroups = [...adminGroups, ...memberGroups].length;
+
+    // Calcular média mensal (últimos 3 meses)
+    const threeMonthsAgo = new Date();
+    threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+    const recentExpenses = userExpenses.filter(exp => new Date(exp.date) >= threeMonthsAgo);
+    const monthlyAverage = recentExpenses.reduce((sum, exp) => sum + (exp.amount || 0), 0) / 3;
+
+    setStats({
+      totalExpenses,
+      totalGroups,
+      monthlyAverage
+    });
+    setIsLoading(false);
+  };
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      await User.updateMyUserData({
+        monthly_budget: parseFloat(editData.monthly_budget) || null,
+        savings_goal: parseFloat(editData.savings_goal) || null,
+        notifications_enabled: editData.notifications_enabled
+      });
+      setIsEditing(false);
+      loadData();
+      toast({
+        title: "Sucesso!",
+        description: "Suas metas financeiras foram atualizadas.",
+      });
+    } catch (error) {
+      console.error("Erro ao salvar dados:", error);
+      toast({
+        title: "Erro",
+        description: "Não foi possível salvar suas metas.",
+        variant: "destructive",
+      });
+    }
+    setIsSaving(false);
+  };
+
+  const handleLogout = async () => {
+    await User.logout();
+    window.location.reload();
+  };
+  
+  const handlePictureUpload = async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    setIsUploading(true);
+    try {
+      const { file_url } = await UploadFile({ file });
+      await User.updateMyUserData({ profile_picture_url: file_url });
+      toast({
+        title: "Sucesso!",
+        description: "Sua foto de perfil foi atualizada.",
+      });
+      loadData(); // Recarregar dados para mostrar a nova foto
+    } catch (error) {
+      console.error("Erro ao fazer upload da foto:", error);
+      toast({
+        title: "Erro",
+        description: "Não foi possível enviar sua foto.",
+        variant: "destructive",
+      });
+    }
+    setIsUploading(false);
+  };
+
+  if (isLoading) {
+    return (
+      <div className="p-4 max-w-md mx-auto">
+        <div className="animate-pulse space-y-4">
+          <div className="h-8 bg-gray-200 rounded" />
+          <div className="h-32 bg-gray-200 rounded" />
+          <div className="h-48 bg-gray-200 rounded" />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-4 max-w-md mx-auto">
+      {/* Header */}
+      <div className="text-center mb-6">
+        <div className="relative w-24 h-24 mx-auto mb-4 group">
+          <div className="w-24 h-24 bg-gradient-to-r from-emerald-500 to-blue-500 rounded-full flex items-center justify-center overflow-hidden">
+            {isUploading ? (
+               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white" />
+            ) : user.profile_picture_url ? (
+              <img src={user.profile_picture_url} alt="Perfil" className="w-full h-full object-cover" />
+            ) : (
+              <span className="text-white font-bold text-3xl">
+                {user.full_name?.charAt(0)?.toUpperCase() || "U"}
+              </span>
+            )}
+          </div>
+          <input 
+            type="file" 
+            ref={fileInputRef} 
+            onChange={handlePictureUpload}
+            className="hidden" 
+            accept="image/*"
+          />
+          <Button 
+            variant="outline" 
+            size="icon"
+            onClick={() => fileInputRef.current.click()}
+            className="absolute bottom-0 right-0 rounded-full w-8 h-8 bg-white/80 backdrop-blur-sm group-hover:opacity-100 opacity-0 transition-opacity"
+            disabled={isUploading}
+          >
+            <Camera className="w-4 h-4" />
+          </Button>
+        </div>
+        <h1 className="text-2xl font-bold text-gray-800 mb-1">{user.full_name}</h1>
+        <p className="text-gray-600">{user.email}</p>
+        <Badge variant="outline" className="mt-2">
+          {user.role === 'admin' ? 'Administrador' : 'Usuário'}
+        </Badge>
+      </div>
+
+      {/* Stats Cards */}
+      <div className="grid grid-cols-3 gap-3 mb-6">
+        <Card className="text-center">
+          <CardContent className="p-3">
+            <TrendingUp className="w-6 h-6 text-red-500 mx-auto mb-1" />
+            <p className="text-xs text-gray-500">Total Gasto</p>
+            <p className="font-bold text-sm">R$ {stats.totalExpenses.toLocaleString('pt-BR')}</p>
+          </CardContent>
+        </Card>
+
+        <Card className="text-center">
+          <CardContent className="p-3">
+            <Users className="w-6 h-6 text-blue-500 mx-auto mb-1" />
+            <p className="text-xs text-gray-500">Grupos</p>
+            <p className="font-bold text-sm">{stats.totalGroups}</p>
+          </CardContent>
+        </Card>
+
+        <Card className="text-center">
+          <CardContent className="p-3">
+            <Wallet className="w-6 h-6 text-green-500 mx-auto mb-1" />
+            <p className="text-xs text-gray-500">Média/Mês</p>
+            <p className="font-bold text-sm">R$ {stats.monthlyAverage.toLocaleString('pt-BR')}</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Profile Info */}
+      <Card className="mb-6">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-lg flex items-center justify-between">
+            <span className="flex items-center gap-2">
+              <User2 className="w-5 h-5" />
+              Informações Pessoais
+            </span>
+            <Button 
+              variant="ghost" 
+              size="sm"
+              onClick={() => setIsEditing(!isEditing)}
+            >
+              <Edit3 className="w-4 h-4 mr-1" /> {isEditing ? "Cancelar" : "Editar"}
+            </Button>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center gap-3">
+            <Mail className="w-4 h-4 text-gray-400" />
+            <div>
+              <p className="text-sm text-gray-500">Email</p>
+              <p className="font-medium">{user.email}</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <Calendar className="w-4 h-4 text-gray-400" />
+            <div>
+              <p className="text-sm text-gray-500">Membro desde</p>
+              <p className="font-medium">
+                {format(new Date(user.created_date), "dd 'de' MMMM 'de' yyyy", { locale: ptBR })}
+              </p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Financial Settings */}
+      <Card className="mb-6">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-lg flex items-center gap-2">
+            <Target className="w-5 h-5" />
+            Metas Financeiras
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {isEditing ? (
+            <>
+              <div>
+                <Label htmlFor="budget" className="text-gray-900">Orçamento Mensal (R$)</Label>
+                <Input
+                  id="budget"
+                  type="number"
+                  step="0.01"
+                  placeholder="Ex: 2500"
+                  value={editData.monthly_budget}
+                  onChange={(e) => setEditData(prev => ({...prev, monthly_budget: e.target.value}))}
+                  className="mt-1"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="savings" className="text-gray-900">Meta de Economia Mensal (R$)</Label>
+                <Input
+                  id="savings"
+                  type="number"
+                  step="0.01"
+                  placeholder="Ex: 1000"
+                  value={editData.savings_goal}
+                  onChange={(e) => setEditData(prev => ({...prev, savings_goal: e.target.value}))}
+                  className="mt-1"
+                />
+              </div>
+
+              <Button
+                  onClick={handleSave}
+                  disabled={isSaving}
+                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white"
+                >
+                  {isSaving ? "Salvando..." : <><Save className="w-4 h-4 mr-2" />Salvar Metas</>}
+              </Button>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                <span className="text-sm text-gray-600">Orçamento Mensal</span>
+                <span className="font-medium text-emerald-700">
+                  {user.monthly_budget ? `R$ ${parseFloat(user.monthly_budget).toLocaleString('pt-BR')}` : "Não definido"}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                <span className="text-sm text-gray-600">Meta de Economia</span>
+                <span className="font-medium text-blue-700">
+                  {user.savings_goal ? `R$ ${parseFloat(user.savings_goal).toLocaleString('pt-BR')}` : "Não definido"}
+                </span>
+              </div>
+              <Button variant="outline" onClick={() => setIsEditing(true)} className="w-full">
+                <Edit3 className="w-4 h-4 mr-2" /> Definir Metas
+              </Button>
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Settings */}
+      <Card className="mb-6">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-lg flex items-center gap-2">
+            <Settings className="w-5 h-5" />
+            Configurações
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <span className="text-sm">Notificações</span>
+              <Badge variant={user.notifications_enabled !== false ? "default" : "secondary"}>
+                {user.notifications_enabled !== false ? "Ativadas" : "Desativadas"}
+              </Badge>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <span className="text-sm">Versão do App</span>
+              <Badge variant="outline">v1.0.0</Badge>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Logout */}
+      <Button 
+        variant="destructive" 
+        onClick={handleLogout}
+        className="w-full"
+      >
+        <LogOut className="w-4 h-4 mr-2" />
+        Sair do App
+      </Button>
+    </div>
+  );
+}

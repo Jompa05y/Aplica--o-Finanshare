@@ -1,0 +1,163 @@
+import React, { useState, useEffect, useCallback } from "react";
+import { Debt } from "@/entities/Debt";
+import { User } from "@/entities/User";
+import { useNavigate } from "react-router-dom";
+import { createPageUrl } from "@/utils";
+import { ArrowLeft, Save, Landmark } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useToast } from "@/components/ui/use-toast";
+
+export default function AddDebt() {
+  const navigate = useNavigate();
+  const { toast } = useToast();
+  const [user, setUser] = useState(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [debtId, setDebtId] = useState(null);
+  const [debt, setDebt] = useState({
+    title: "",
+    amount: "",
+    due_date: new Date().toISOString().split('T')[0],
+    type: "other"
+  });
+
+  const loadDebtData = useCallback(async (id) => {
+    try {
+      const debtData = await Debt.get(id);
+      setDebt({
+        ...debtData,
+        amount: debtData.amount.toString(),
+        due_date: debtData.due_date ? new Date(debtData.due_date).toISOString().split('T')[0] : ''
+      });
+    } catch (error) {
+      toast({ title: "Erro", description: "Não foi possível carregar os dados da dívida.", variant: "destructive" });
+    }
+  }, [toast]); // Added toast to dependencies
+
+  useEffect(() => {
+    const loadUser = async () => {
+      const userData = await User.me();
+      setUser(userData);
+    };
+    loadUser();
+    
+    const urlParams = new URLSearchParams(window.location.search);
+    const id = urlParams.get('id');
+    if (id) {
+      setIsEditing(true);
+      setDebtId(id);
+      loadDebtData(id);
+    }
+  }, [loadDebtData]); // Added loadDebtData to dependencies
+
+  const handleInputChange = (field, value) => {
+    setDebt(prev => ({ ...prev, [field]: value }));
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setIsLoading(true);
+    const debtData = {
+      ...debt,
+      amount: parseFloat(debt.amount)
+    };
+    try {
+      if (isEditing) {
+        await Debt.update(debtId, debtData);
+        toast({
+          title: "Sucesso!",
+          description: "Dívida atualizada com sucesso!",
+          className: "bg-green-100 text-green-800",
+        });
+      } else {
+        await Debt.create(debtData);
+        
+        // Atualizar saldo atual do usuário (diminuir)
+        const currentBalance = user.current_balance || 0;
+        const newBalance = currentBalance - parseFloat(debt.amount);
+        const historyEntry = {
+          date: new Date().toISOString(),
+          amount: -parseFloat(debt.amount),
+          previous_balance: currentBalance,
+          new_balance: newBalance,
+          type: "debt",
+          description: `Dívida: ${debt.title}`
+        };
+        await User.updateMe({
+          current_balance: newBalance,
+          balance_history: [...(user.balance_history || []), historyEntry]
+        });
+        
+        toast({
+          title: "Sucesso!",
+          description: "Dívida adicionada com sucesso!",
+          className: "bg-green-100 text-green-800",
+        });
+      }
+      navigate(createPageUrl("Debts"));
+    } catch (error) {
+      toast({
+        title: "Erro",
+        description: `Não foi possível ${isEditing ? 'atualizar' : 'adicionar'} a dívida.`,
+        variant: "destructive",
+      });
+    }
+    setIsLoading(false);
+  };
+
+  return (
+    <div className="p-4 max-w-md mx-auto">
+      <div className="flex items-center gap-4 mb-6">
+        <Button variant="ghost" size="icon" onClick={() => navigate(-1)}>
+          <ArrowLeft className="w-5 h-5" />
+        </Button>
+        <div>
+          <h1 className="text-xl font-bold text-gray-800">{isEditing ? 'Editar Dívida' : 'Adicionar Dívida'}</h1>
+          <p className="text-sm text-gray-600">{isEditing ? 'Ajuste os detalhes da dívida' : 'Registre um novo débito a pagar.'}</p>
+        </div>
+      </div>
+      <form onSubmit={handleSubmit} className="space-y-6">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2"><Landmark className="w-5 h-5"/>Detalhes da Dívida</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <Label htmlFor="title">Título</Label>
+              <Input id="title" value={debt.title} onChange={(e) => handleInputChange("title", e.target.value)} required />
+            </div>
+            <div>
+              <Label htmlFor="amount">Valor (R$)</Label>
+              <Input id="amount" type="number" step="0.01" value={debt.amount} onChange={(e) => handleInputChange("amount", e.target.value)} required />
+            </div>
+            <div>
+              <Label htmlFor="due_date">Data de Vencimento</Label>
+              <Input id="due_date" type="date" value={debt.due_date} onChange={(e) => handleInputChange("due_date", e.target.value)} required />
+            </div>
+            <div>
+              <Label htmlFor="type">Tipo</Label>
+              <Select value={debt.type} onValueChange={(value) => handleInputChange("type", value)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="credit_card">Cartão de Crédito</SelectItem>
+                  <SelectItem value="loan">Empréstimo</SelectItem>
+                  <SelectItem value="bill">Conta Fixa</SelectItem>
+                  <SelectItem value="other">Outro</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </CardContent>
+        </Card>
+        <Button type="submit" disabled={isLoading || !debt.title || !debt.amount} className="w-full h-12 text-white bg-emerald-600 hover:bg-emerald-700">
+          {isLoading ? "Salvando..." : <><Save className="w-5 h-5 mr-2" /><span className="text-white">{isEditing ? 'Salvar Alterações' : 'Salvar Dívida'}</span></>}
+        </Button>
+      </form>
+    </div>
+  );
+}

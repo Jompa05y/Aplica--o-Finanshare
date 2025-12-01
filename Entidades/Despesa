@@ -1,0 +1,73 @@
+{
+  "name": "Expense",
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Título da despesa"
+    },
+    "amount": {
+      "type": "number",
+      "description": "Valor da despesa"
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "alimentacao",
+        "moradia",
+        "transporte",
+        "lazer",
+        "saude",
+        "educacao",
+        "vestuario",
+        "outros"
+      ],
+      "default": "outros",
+      "description": "Categoria da despesa"
+    },
+    "description": {
+      "type": "string",
+      "description": "Descrição detalhada da despesa"
+    },
+    "date": {
+      "type": "string",
+      "format": "date",
+      "description": "Data da despesa"
+    },
+    "is_group_expense": {
+      "type": "boolean",
+      "default": false,
+      "description": "Se é uma despesa de grupo"
+    },
+    "group_id": {
+      "type": "string",
+      "description": "ID do grupo (se for despesa de grupo)"
+    },
+    "paid_by": {
+      "type": "string",
+      "description": "Email de quem pagou a despesa"
+    },
+    "split_between": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Lista de emails para dividir a despesa"
+    },
+    "amount_per_person": {
+      "type": "number",
+      "description": "Valor por pessoa (calculado automaticamente)"
+    }
+  },
+  "required": [
+    "title",
+    "amount",
+    "category",
+    "date"
+  ],
+  "rls": {
+    "write": {
+      "created_by": "{{user.email}}"
+    }
+  }
+}

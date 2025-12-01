@@ -1,0 +1,41 @@
+{
+  "name": "Contribution",
+  "type": "object",
+  "properties": {
+    "goal_id": {
+      "type": "string",
+      "description": "ID da meta relacionada"
+    },
+    "amount": {
+      "type": "number",
+      "description": "Valor da contribuição"
+    },
+    "description": {
+      "type": "string",
+      "description": "Descrição da contribuição"
+    },
+    "date": {
+      "type": "string",
+      "format": "date",
+      "description": "Data da contribuição"
+    },
+    "contributor_email": {
+      "type": "string",
+      "description": "Email de quem fez a contribuição"
+    },
+    "contributor_name": {
+      "type": "string",
+      "description": "Nome de quem fez a contribuição"
+    }
+  },
+  "required": [
+    "goal_id",
+    "amount",
+    "contributor_email"
+  ],
+  "rls": {
+    "write": {
+      "created_by": "{{user.email}}"
+    }
+  }
+}

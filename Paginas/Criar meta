@@ -1,0 +1,162 @@
+import React, { useState, useEffect } from "react";
+import { Goal } from "@/entities/Goal";
+import { Group } from "@/entities/Group";
+import { User } from "@/entities/User";
+import { useNavigate } from "react-router-dom";
+import { createPageUrl } from "@/utils";
+import { ArrowLeft, Save, Target, Users, DollarSign, Calendar, Edit } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useToast } from "@/components/ui/use-toast";
+
+export default function CreateGoal() {
+  const navigate = useNavigate();
+  const { toast } = useToast();
+  const [user, setUser] = useState(null);
+  const [groups, setGroups] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [goal, setGoal] = useState({
+    name: "",
+    target_amount: "",
+    deadline: "",
+    description: "",
+    type: "personal",
+    group_id: null
+  });
+
+  useEffect(() => {
+    loadPrerequisites();
+  }, []);
+
+  const loadPrerequisites = async () => {
+    const userData = await User.me();
+    setUser(userData);
+    const userGroups = await Group.filter({ admin_email: userData.email });
+    const memberGroups = (await Group.list()).filter(g => g.members?.some(m => m.email === userData.email));
+    setGroups([...userGroups, ...memberGroups]);
+  };
+
+  const handleInputChange = (field, value) => {
+    setGoal(prev => ({ ...prev, [field]: value }));
+  };
+
+  const handleGoalTypeToggle = (checked) => {
+    setGoal(prev => ({
+      ...prev,
+      type: checked ? "group" : "personal",
+      group_id: null
+    }));
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setIsLoading(true);
+
+    try {
+      let participants = [];
+      if (goal.type === 'group' && goal.group_id) {
+          const selectedGroup = groups.find(g => g.id === goal.group_id);
+          participants = [
+              { email: selectedGroup.admin_email, name: 'Admin', contributed: 0 },
+              ...(selectedGroup.members || []).map(m => ({ email: m.email, name: m.name, contributed: 0 }))
+          ];
+      }
+
+      await Goal.create({
+        ...goal,
+        target_amount: parseFloat(goal.target_amount),
+        participants: participants,
+      });
+
+      toast({
+        title: "Sucesso!",
+        description: "Sua nova meta foi criada.",
+        className: "bg-green-100 text-green-800",
+      });
+      navigate(createPageUrl("Goals"));
+    } catch (error) {
+      console.error("Erro ao criar meta:", error);
+      toast({
+        title: "Erro",
+        description: "Não foi possível criar a meta.",
+        variant: "destructive",
+      });
+    }
+    setIsLoading(false);
+  };
+
+  return (
+    <div className="p-4 max-w-md mx-auto">
+      <div className="flex items-center gap-4 mb-6">
+        <Button variant="ghost" size="icon" onClick={() => navigate(createPageUrl("Goals"))}>
+          <ArrowLeft className="w-5 h-5" />
+        </Button>
+        <div>
+          <h1 className="text-xl font-bold text-gray-800">Criar Nova Meta</h1>
+          <p className="text-sm text-gray-600">Defina seu próximo objetivo financeiro</p>
+        </div>
+      </div>
+
+      <form onSubmit={handleSubmit} className="space-y-6">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg flex items-center gap-2"><Target/> Detalhes da Meta</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <Label htmlFor="name">Nome da Meta</Label>
+              <Input id="name" placeholder="Ex: Viagem para a praia" value={goal.name} onChange={(e) => handleInputChange("name", e.target.value)} required />
+            </div>
+            <div>
+              <Label htmlFor="target_amount">Valor Total (R$)</Label>
+              <Input id="target_amount" type="number" step="0.01" placeholder="2000.00" value={goal.target_amount} onChange={(e) => handleInputChange("target_amount", e.target.value)} required />
+            </div>
+            <div>
+              <Label htmlFor="deadline">Data Limite (opcional)</Label>
+              <Input id="deadline" type="date" value={goal.deadline} onChange={(e) => handleInputChange("deadline", e.target.value)} />
+            </div>
+            <div>
+              <Label htmlFor="description">Descrição (opcional)</Label>
+              <Textarea id="description" placeholder="Detalhes sobre o objetivo..." value={goal.description} onChange={(e) => handleInputChange("description", e.target.value)} />
+            </div>
+          </CardContent>
+        </Card>
+
+        {groups.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2"><Users/> Meta em Grupo</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="group-switch">Compartilhar com um grupo</Label>
+                <Switch id="group-switch" checked={goal.type === 'group'} onCheckedChange={handleGoalTypeToggle} />
+              </div>
+              {goal.type === 'group' && (
+                <div className="mt-4">
+                  <Label htmlFor="group_id">Selecione o Grupo</Label>
+                  <Select value={goal.group_id || ''} onValueChange={(value) => handleInputChange("group_id", value)}>
+                    <SelectTrigger><SelectValue placeholder="Escolha um grupo"/></SelectTrigger>
+                    <SelectContent>
+                      {groups.map(g => <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        <Button type="submit" disabled={isLoading || !goal.name || !goal.target_amount} className="w-full h-12 bg-emerald-600 hover:bg-emerald-700">
+          <Save className="w-5 h-5 mr-2" />
+          {isLoading ? "Salvando..." : "Salvar Meta"}
+        </Button>
+      </form>
+    </div>
+  );
+}

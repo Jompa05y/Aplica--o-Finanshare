@@ -1,0 +1,56 @@
+{
+  "name": "Group",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Nome do grupo"
+    },
+    "description": {
+      "type": "string",
+      "description": "Descrição do grupo"
+    },
+    "invite_code": {
+      "type": "string",
+      "description": "Código de convite único"
+    },
+    "admin_email": {
+      "type": "string",
+      "description": "Email do administrador do grupo"
+    },
+    "members": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "joined_date": {
+            "type": "string",
+            "format": "date"
+          }
+        }
+      },
+      "description": "Lista de membros do grupo"
+    },
+    "total_expenses": {
+      "type": "number",
+      "default": 0,
+      "description": "Total de despesas do grupo"
+    }
+  },
+  "required": [
+    "name",
+    "admin_email",
+    "invite_code"
+  ],
+  "rls": {
+    "write": {
+      "data.admin_email": "{{user.email}}"
+    }
+  }
+}

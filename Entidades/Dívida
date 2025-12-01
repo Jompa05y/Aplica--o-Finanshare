@@ -1,0 +1,49 @@
+{
+  "name": "Debt",
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Título da dívida (ex: Fatura Nubank, Parcela Carro)"
+    },
+    "amount": {
+      "type": "number",
+      "description": "Valor total da dívida ou da parcela"
+    },
+    "due_date": {
+      "type": "string",
+      "format": "date",
+      "description": "Data de vencimento"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "paid"
+      ],
+      "default": "pending",
+      "description": "Status da dívida"
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "credit_card",
+        "loan",
+        "bill",
+        "other"
+      ],
+      "default": "other",
+      "description": "Tipo da dívida"
+    }
+  },
+  "required": [
+    "title",
+    "amount",
+    "due_date"
+  ],
+  "rls": {
+    "write": {
+      "created_by": "{{user.email}}"
+    }
+  }
+}

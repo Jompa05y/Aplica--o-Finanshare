@@ -1,0 +1,417 @@
+import React, { useState, useEffect, useCallback } from "react";
+import { Expense } from "@/entities/Expense";
+import { Group } from "@/entities/Group";
+import { User } from "@/entities/User";
+import { useNavigate } from "react-router-dom";
+import { createPageUrl } from "@/utils";
+import { ArrowLeft, Save, Calculator, Users } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { useToast } from "@/components/ui/use-toast";
+
+const categories = [
+  { value: "alimentacao", label: "Alimentação", icon: "🍽️" },
+  { value: "moradia", label: "Moradia", icon: "🏠" },
+  { value: "transporte", label: "Transporte", icon: "🚗" },
+  { value: "lazer", label: "Lazer", icon: "🎮" },
+  { value: "saude", label: "Saúde", icon: "⚕️" },
+  { value: "educacao", label: "Educação", icon: "📚" },
+  { value: "vestuario", label: "Vestuário", icon: "👕" },
+  { value: "outros", label: "Outros", icon: "💰" }
+];
+
+export default function AddExpense() {
+  const navigate = useNavigate();
+  const { toast } = useToast();
+  const [user, setUser] = useState(null);
+  const [groups, setGroups] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [expenseId, setExpenseId] = useState(null);
+  const [expense, setExpense] = useState({
+    title: "",
+    amount: "",
+    category: "outros",
+    description: "",
+    date: new Date().toISOString().split('T')[0],
+    is_group_expense: false,
+    group_id: "",
+    split_between: []
+  });
+
+  const loadUserData = useCallback(async (preselectedGroupId) => {
+    const userData = await User.me();
+    setUser(userData);
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const groupIdFromUrl = urlParams.get('groupId');
+    const finalGroupId = preselectedGroupId || groupIdFromUrl;
+
+    // Carregar grupos do usuário (onde é admin ou membro)
+    const memberGroups = await Group.list();
+    const allUserGroups = memberGroups.filter(group =>
+      group.members?.some(member => member.email === userData.email) ||
+      group.admin_email === userData.email
+    );
+    setGroups(allUserGroups);
+
+    if (finalGroupId && allUserGroups.some(g => g.id === finalGroupId)) {
+        setExpense(prev => ({
+            ...prev,
+            is_group_expense: true,
+            group_id: finalGroupId
+        }));
+    }
+  }, []); // Dependencies for useCallback: setExpense is a state setter, stable.
+
+  const loadExpenseData = useCallback(async (id) => {
+    const expenseData = await Expense.get(id);
+    setExpense({
+      ...expenseData,
+      amount: expenseData.amount.toString(),
+      date: expenseData.date ? new Date(expenseData.date).toISOString().split('T')[0] : ''
+    });
+    loadUserData(expenseData.group_id); // Carrega dados do usuário e grupos
+  }, [loadUserData]); // Dependencies for useCallback: calls loadUserData
+
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const id = urlParams.get('id');
+    if (id) {
+      setIsEditing(true);
+      setExpenseId(id);
+      loadExpenseData(id);
+    } else {
+      loadUserData();
+    }
+  }, [loadExpenseData, loadUserData]); // Dependencies for useEffect
+
+  const handleInputChange = (field, value) => {
+    setExpense(prev => ({
+      ...prev,
+      [field]: value
+    }));
+  };
+
+  const handleGroupToggle = (checked) => {
+    setExpense(prev => ({
+      ...prev,
+      is_group_expense: checked,
+      group_id: checked ? (groups[0]?.id || "") : "",
+      split_between: checked ? [] : []
+    }));
+  };
+
+  const calculateAmountPerPerson = () => {
+    if (!expense.is_group_expense || !expense.group_id || !expense.amount) return 0;
+
+    const selectedGroup = groups.find(g => g.id === expense.group_id);
+    if (!selectedGroup) return 0;
+
+    const totalMembers = (selectedGroup.members?.length || 0) + 1; // +1 for admin
+    return parseFloat(expense.amount) / totalMembers;
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setIsLoading(true);
+
+    try {
+      const expenseData = {
+        ...expense,
+        amount: parseFloat(expense.amount),
+        paid_by: user.email,
+        amount_per_person: expense.is_group_expense ? calculateAmountPerPerson() : parseFloat(expense.amount)
+      };
+
+      // Se for despesa de grupo, adicionar todos os membros do grupo
+      if (expense.is_group_expense && expense.group_id) {
+        const selectedGroup = groups.find(g => g.id === expense.group_id);
+        if (selectedGroup) {
+          expenseData.split_between = [
+            selectedGroup.admin_email,
+            ...(selectedGroup.members?.map(m => m.email) || [])
+          ];
+        }
+      }
+
+      if (isEditing) {
+        await Expense.update(expenseId, expenseData);
+
+        // Atualizar total_expenses do grupo se for despesa de grupo
+        if (expenseData.is_group_expense && expenseData.group_id) {
+          const groupExpenses = await Expense.filter({ group_id: expenseData.group_id });
+          const totalExpenses = groupExpenses.reduce((sum, exp) => sum + exp.amount, 0);
+          await Group.update(expenseData.group_id, { total_expenses: totalExpenses });
+        }
+
+        toast({
+          title: "Sucesso!",
+          description: "Sua despesa foi atualizada.",
+          className: "bg-green-100 text-green-800",
+        });
+      } else {
+        await Expense.create(expenseData);
+
+        // Atualizar total_expenses do grupo se for despesa de grupo
+        if (expenseData.is_group_expense && expenseData.group_id) {
+          const groupExpenses = await Expense.filter({ group_id: expenseData.group_id });
+          const totalExpenses = groupExpenses.reduce((sum, exp) => sum + exp.amount, 0);
+          await Group.update(expenseData.group_id, { total_expenses: totalExpenses });
+        }
+
+        // Atualizar saldo atual do usuário (diminuir)
+        const currentBalance = user.current_balance || 0;
+        const newBalance = currentBalance - parseFloat(expense.amount);
+        const historyEntry = {
+          date: new Date().toISOString(),
+          amount: -parseFloat(expense.amount),
+          previous_balance: currentBalance,
+          new_balance: newBalance,
+          type: "expense",
+          description: `Despesa: ${expense.title}`
+        };
+        await User.updateMe({
+          current_balance: newBalance,
+          balance_history: [...(user.balance_history || []), historyEntry]
+        });
+
+        toast({
+          title: "Sucesso!",
+          description: "Sua despesa foi adicionada.",
+          className: "bg-green-100 text-green-800",
+        });
+      }
+      navigate(createPageUrl("Dashboard"));
+    } catch (error) {
+      console.error("Erro ao salvar despesa:", error);
+      toast({
+        title: "Erro",
+        description: `Não foi possível ${isEditing ? 'atualizar' : 'salvar'} a despesa.`,
+        variant: "destructive",
+      });
+    }
+    setIsLoading(false);
+  };
+
+  const selectedCategory = categories.find(c => c.value === expense.category);
+  const amountPerPerson = calculateAmountPerPerson();
+
+  return (
+    <div className="p-4 max-w-md mx-auto">
+      {/* Header */}
+      <div className="flex items-center gap-4 mb-6">
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => navigate(-1)} // Voltar para a página anterior
+        >
+          <ArrowLeft className="w-5 h-5" />
+        </Button>
+        <div>
+          <h1 className="text-xl font-bold text-gray-800">{isEditing ? 'Editar Despesa' : 'Adicionar Despesa'}</h1>
+          <p className="text-sm text-gray-600">{isEditing ? 'Ajuste os detalhes do gasto' : 'Registre um novo gasto'}</p>
+        </div>
+      </div>
+
+      <form onSubmit={handleSubmit} className="space-y-6">
+        {/* Basic Info */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">Informações Básicas</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <Label htmlFor="title">Título da Despesa</Label>
+              <Input
+                id="title"
+                placeholder="Ex: Almoço, Gasolina, Conta de luz..."
+                value={expense.title}
+                onChange={(e) => handleInputChange("title", e.target.value)}
+                required
+                className="mt-1"
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="amount">Valor (R$)</Label>
+              <Input
+                id="amount"
+                type="number"
+                step="0.01"
+                placeholder="0,00"
+                value={expense.amount}
+                onChange={(e) => handleInputChange("amount", e.target.value)}
+                required
+                className="mt-1"
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="category">Categoria</Label>
+              <Select value={expense.category} onValueChange={(value) => handleInputChange("category", value)}>
+                <SelectTrigger className="mt-1">
+                  <SelectValue placeholder="Selecione uma categoria" />
+                </SelectTrigger>
+                <SelectContent>
+                  {categories.map((category) => (
+                    <SelectItem key={category.value} value={category.value}>
+                      <div className="flex items-center gap-2">
+                        <span>{category.icon}</span>
+                        <span>{category.label}</span>
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div>
+              <Label htmlFor="date">Data</Label>
+              <Input
+                id="date"
+                type="date"
+                value={expense.date}
+                onChange={(e) => handleInputChange("date", e.target.value)}
+                required
+                className="mt-1"
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="description">Descrição (opcional)</Label>
+              <Textarea
+                id="description"
+                placeholder="Adicione mais detalhes sobre a despesa..."
+                value={expense.description}
+                onChange={(e) => handleInputChange("description", e.target.value)}
+                className="mt-1"
+                rows={3}
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Group Expense Toggle */}
+        {groups.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Users className="w-5 h-5" />
+                Despesa em Grupo
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-medium">Dividir com grupo</p>
+                  <p className="text-sm text-gray-500">
+                    A despesa será dividida igualmente entre os membros
+                  </p>
+                </div>
+                <Switch
+                  checked={expense.is_group_expense}
+                  onCheckedChange={handleGroupToggle}
+                />
+              </div>
+
+              {expense.is_group_expense && (
+                <div>
+                  <Label htmlFor="group">Selecionar Grupo</Label>
+                  <Select value={expense.group_id} onValueChange={(value) => handleInputChange("group_id", value)}>
+                    <SelectTrigger className="mt-1">
+                      <SelectValue placeholder="Escolha um grupo" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {groups.map((group) => (
+                        <SelectItem key={group.id} value={group.id}>
+                          <div className="flex items-center gap-2">
+                            <Users className="w-4 h-4" />
+                            <span>{group.name}</span>
+                            <Badge variant="secondary" className="ml-auto">
+                              {(group.members?.length || 0) + 1} membros
+                            </Badge>
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              {expense.is_group_expense && expense.group_id && expense.amount > 0 && (
+                <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-lg text-center">
+                  <div className="flex items-center justify-center gap-2 mb-2">
+                    <Calculator className="w-5 h-5 text-emerald-700" />
+                    <span className="font-semibold text-emerald-800">Divisão Automática</span>
+                  </div>
+                  <p className="text-sm text-emerald-700">
+                    Cada membro pagará
+                  </p>
+                  <p className="text-2xl font-bold text-emerald-600">
+                    R$ {amountPerPerson.toLocaleString('pt-BR', {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2
+                    })}
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Summary */}
+        <Card className="bg-gray-50">
+          <CardContent className="p-4">
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 bg-white rounded-lg flex items-center justify-center shadow-sm">
+                <span className="text-2xl">{selectedCategory?.icon}</span>
+              </div>
+              <div className="flex-1">
+                <p className="font-medium text-gray-900">
+                  {expense.title || "Nova despesa"}
+                </p>
+                <p className="text-sm text-gray-600">
+                  {selectedCategory?.label} • {expense.date}
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="text-xl font-bold text-red-600">
+                  R$ {parseFloat(expense.amount || 0).toLocaleString('pt-BR', {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2
+                  })}
+                </p>
+                {expense.is_group_expense && (
+                  <Badge variant="secondary" className="text-xs">
+                    Grupo
+                  </Badge>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Submit Button */}
+        <Button
+          type="submit"
+          disabled={isLoading || !expense.title || !expense.amount}
+          className="w-full bg-emerald-600 hover:bg-emerald-700 text-white h-12"
+        >
+          {isLoading ? (
+            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2" />
+          ) : (
+            <Save className="w-5 h-5 mr-2" />
+          )}
+          <span className="text-white">{isLoading ? "Salvando..." : (isEditing ? 'Salvar Alterações' : 'Salvar Despesa')}</span>
+        </Button>
+      </form>
+    </div>
+  );
+}

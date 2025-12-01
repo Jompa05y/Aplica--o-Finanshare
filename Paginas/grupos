@@ -1,0 +1,343 @@
+import React, { useState, useEffect } from "react";
+import { Group } from "@/entities/Group";
+import { User } from "@/entities/User";
+import { Expense } from "@/entities/Expense"; // Added Expense import
+import { Link } from "react-router-dom";
+import { createPageUrl } from "@/utils";
+import { 
+  Plus, 
+  Users, 
+  Copy, 
+  ArrowRight, // Replaced Settings with ArrowRight
+  UserPlus,
+  Crown,
+  Calendar,
+  PieChart as PieChartIcon // Added PieChartIcon
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { toast } from "@/components/ui/use-toast";
+import { format } from "date-fns";
+import { ptBR } from "date-fns/locale";
+import { PieChart, Pie, Cell, ResponsiveContainer, Legend } from "recharts"; // Added Recharts imports
+
+const COLORS = ['#10B981', '#3B82F6', '#8B5CF6', '#F59E0B', '#EF4444', '#6B7280'];
+
+const categories = {
+  "alimentacao": "Alimentação", "moradia": "Moradia", "transporte": "Transporte",
+  "lazer": "Lazer", "saude": "Saúde", "educacao": "Educação",
+  "vestuario": "Vestuário", "outros": "Outros"
+};
+
+function GroupCategoryChart({ groupId }) {
+  const [chartData, setChartData] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchExpenses = async () => {
+      setIsLoading(true);
+      // Ensure groupId is valid before fetching
+      if (!groupId) {
+        setChartData([]);
+        setIsLoading(false);
+        return;
+      }
+
+      const groupExpenses = await Expense.filter({ group_id: groupId });
+      const categoryTotals = {};
+      groupExpenses.forEach(expense => {
+        // Ensure expense.category is a valid key, default to 'outros' if not found
+        const categoryKey = expense.category && categories[expense.category] ? expense.category : "outros";
+        categoryTotals[categoryKey] = (categoryTotals[categoryKey] || 0) + expense.amount;
+      });
+      const data = Object.keys(categories).map(cat => ({
+        name: categories[cat],
+        value: categoryTotals[cat] || 0
+      })).filter(item => item.value > 0); // Only show categories with expenses
+      
+      setChartData(data);
+      setIsLoading(false);
+    };
+    fetchExpenses();
+  }, [groupId]);
+
+  if (isLoading) return <div className="h-48 flex items-center justify-center text-gray-500">Carregando gráfico...</div>;
+  if (chartData.length === 0) return <div className="h-48 flex items-center justify-center text-gray-500">Sem dados de despesas para este grupo.</div>;
+
+  return (
+    <div className="h-64">
+      <ResponsiveContainer width="100%" height="100%">
+        <PieChart>
+          <Pie 
+            data={chartData} 
+            dataKey="value" 
+            nameKey="name" 
+            cx="50%" 
+            cy="50%" 
+            outerRadius={80}
+            label={({ percent }) => `${(percent * 100).toFixed(0)}%`} // Display percentage on slices
+            labelLine={false}
+          >
+            {chartData.map((entry, index) => (
+              <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+            ))}
+          </Pie>
+          <Legend iconSize={10} wrapperStyle={{fontSize: '12px'}}/>
+        </PieChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+export default function Groups() {
+  const [user, setUser] = useState(null);
+  const [groups, setGroups] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [joinCode, setJoinCode] = useState("");
+  const [isJoining, setIsJoining] = useState(false);
+  const [selectedGroupForChart, setSelectedGroupForChart] = useState(null); // Added state
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const loadData = async () => {
+    const userData = await User.me();
+    setUser(userData);
+
+    // Carregar grupos onde o usuário é admin
+    const adminGroups = await Group.filter({ admin_email: userData.email });
+    
+    // Carregar todos os grupos e filtrar onde o usuário é membro
+    const allGroups = await Group.list();
+    const memberGroups = allGroups.filter(group => 
+      group.members?.some(member => member.email === userData.email)
+    );
+
+    // Combinar grupos (admin + membro) e remover duplicatas
+    const userGroups = [...adminGroups, ...memberGroups].reduce((acc, current) => {
+      const x = acc.find(item => item.id === current.id);
+      if (!x) {
+        return acc.concat([current]);
+      } else {
+        return acc;
+      }
+    }, []);
+
+    setGroups(userGroups);
+    setIsLoading(false);
+  };
+
+  const copyInviteCode = async (code) => {
+    await navigator.clipboard.writeText(code);
+    toast({
+      title: "Código copiado!",
+      description: "O código de convite foi copiado para a área de transferência.",
+    });
+  };
+
+  const joinGroup = async () => {
+    if (!joinCode.trim()) return;
+    
+    setIsJoining(true);
+    try {
+      const group = await Group.filter({ invite_code: joinCode.trim() });
+      if (group.length === 0) {
+        toast({
+          title: "Código inválido",
+          description: "Não foi possível encontrar um grupo com esse código.",
+          variant: "destructive"
+        });
+        return;
+      }
+
+      const targetGroup = group[0];
+      
+      // Verificar se já é membro
+      if (targetGroup.admin_email === user.email || 
+          targetGroup.members?.some(m => m.email === user.email)) {
+        toast({
+          title: "Você já é membro deste grupo",
+          description: "Você já participa do grupo " + targetGroup.name,
+          variant: "destructive"
+        });
+        return;
+      }
+
+      // Adicionar usuário ao grupo
+      const updatedMembers = [
+        ...(targetGroup.members || []),
+        {
+          email: user.email,
+          name: user.full_name,
+          joined_date: new Date().toISOString().split('T')[0]
+        }
+      ];
+
+      await Group.update(targetGroup.id, { members: updatedMembers });
+      
+      toast({
+        title: "Sucesso!",
+        description: `Você entrou no grupo "${targetGroup.name}"`,
+      });
+
+      setJoinCode("");
+      loadData();
+    } catch (error) {
+      console.error("Erro ao entrar no grupo:", error);
+      toast({
+        title: "Erro",
+        description: "Não foi possível entrar no grupo. Tente novamente.",
+        variant: "destructive"
+      });
+    }
+    setIsJoining(false);
+  };
+
+  const isAdmin = (group) => group.admin_email === user?.email;
+
+  return (
+    <div className="p-4 max-w-md mx-auto">
+      {/* Header */}
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold text-gray-800 mb-2">Meus Grupos</h1>
+        <p className="text-gray-600">Gerencie grupos e divida despesas facilmente</p>
+      </div>
+
+      {/* Actions */}
+      <div className="flex gap-3 mb-6">
+        <Link to={createPageUrl("CreateGroup")} className="flex-1">
+          <Button className="w-full bg-emerald-600 hover:bg-emerald-700 text-white">
+            <Plus className="w-4 h-4 mr-2" />
+            Criar Grupo
+          </Button>
+        </Link>
+
+        <Dialog>
+          <DialogTrigger asChild>
+            <Button variant="outline" className="flex-1">
+              <UserPlus className="w-4 h-4 mr-2" />
+              Entrar em Grupo
+            </Button>
+          </DialogTrigger>
+          <DialogContent className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle>Entrar em um Grupo</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 mt-4">
+              <div>
+                <label className="text-sm font-medium">Código do Grupo</label>
+                <Input
+                  placeholder="Digite o código de convite"
+                  value={joinCode}
+                  onChange={(e) => setJoinCode(e.target.value)}
+                  className="mt-1"
+                />
+              </div>
+              <Button 
+                onClick={joinGroup} 
+                disabled={isJoining || !joinCode.trim()}
+                className="w-full"
+              >
+                {isJoining ? "Entrando..." : "Entrar no Grupo"}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      </div>
+
+      {/* Groups List */}
+      {isLoading ? (
+        <div className="space-y-4">
+          {[...Array(3)].map((_, i) => (
+            <Card key={i} className="animate-pulse">
+              <CardContent className="p-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 bg-gray-200 rounded-lg" />
+                  <div className="flex-1">
+                    <div className="h-4 bg-gray-200 rounded mb-2" />
+                    <div className="h-3 bg-gray-200 rounded w-24" />
+                  </div>
+                  <div className="h-6 bg-gray-200 rounded w-16" />
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      ) : groups.length === 0 ? (
+        <Card className="text-center py-8">
+          <CardContent>
+            <Users className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+            <h3 className="font-semibold text-gray-800 mb-2">Nenhum grupo ainda</h3>
+            <p className="text-gray-600 text-sm mb-4">
+              Crie seu primeiro grupo ou entre em um existente
+            </p>
+            <div className="flex gap-2 justify-center">
+              <Link to={createPageUrl("CreateGroup")}>
+                <Button size="sm">Criar Grupo</Button>
+              </Link>
+            </div>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-4">
+          {groups.map((group) => (
+            <Card key={group.id} className="hover:shadow-md transition-shadow">
+              <CardHeader className="p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <h3 className="font-semibold text-gray-900 truncate">{group.name}</h3>
+                      {isAdmin(group) && (
+                        <Badge variant="outline" className="text-xs">
+                          <Crown className="w-3 h-3 mr-1" />
+                          Admin
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-4 text-xs text-gray-500">
+                      <span className="flex items-center gap-1">
+                        <Users className="w-3 h-3" />
+                        {(group.members?.length || 0) + 1} membros
+                      </span>
+                    </div>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                     <p className="font-bold text-lg text-emerald-600">R$ {(group.total_expenses || 0).toLocaleString('pt-BR')}</p>
+                     <p className="text-xs text-white bg-gradient-to-r from-orange-500 to-red-500 px-2 py-0.5 rounded">Total Gasto</p>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="p-4 border-t flex justify-between items-center gap-2">
+                 <div className="flex items-center gap-2">
+                    <Dialog>
+                      <DialogTrigger asChild>
+                        <Button variant="outline" size="sm" onClick={() => setSelectedGroupForChart(group.id)}>
+                          <PieChartIcon className="w-4 h-4 mr-2" />
+                          Ver Gráfico
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent className="max-w-md">
+                        <DialogHeader>
+                          <DialogTitle>Gastos por Categoria - {group.name}</DialogTitle>
+                        </DialogHeader>
+                        {selectedGroupForChart === group.id && <GroupCategoryChart groupId={group.id} />}
+                      </DialogContent>
+                    </Dialog>
+                 </div>
+                 <Link to={createPageUrl(`GroupDetail?id=${group.id}`)}>
+                  <Button size="sm" className="bg-pink-600 hover:bg-pink-700 text-white">
+                    Ver Detalhes <ArrowRight className="w-4 h-4 ml-2" />
+                  </Button>
+                </Link>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}

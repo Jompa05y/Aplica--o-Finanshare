@@ -1,0 +1,79 @@
+{
+  "name": "Goal",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Nome da meta (ex: Viagem Rio de Janeiro)"
+    },
+    "target_amount": {
+      "type": "number",
+      "description": "Valor total necessário para atingir a meta"
+    },
+    "current_amount": {
+      "type": "number",
+      "default": 0,
+      "description": "Valor atual acumulado"
+    },
+    "deadline": {
+      "type": "string",
+      "format": "date",
+      "description": "Data limite para atingir a meta (opcional)"
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "personal",
+        "group"
+      ],
+      "default": "personal",
+      "description": "Se a meta é pessoal ou de grupo"
+    },
+    "group_id": {
+      "type": "string",
+      "description": "ID do grupo (se for meta de grupo)"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "active",
+        "completed",
+        "cancelled"
+      ],
+      "default": "active",
+      "description": "Status da meta"
+    },
+    "description": {
+      "type": "string",
+      "description": "Descrição adicional da meta"
+    },
+    "participants": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "contributed": {
+            "type": "number",
+            "default": 0
+          }
+        }
+      },
+      "description": "Lista de participantes e suas contribuições (para metas de grupo)"
+    }
+  },
+  "required": [
+    "name",
+    "target_amount"
+  ],
+  "rls": {
+    "write": {
+      "created_by": "{{user.email}}"
+    }
+  }
+}

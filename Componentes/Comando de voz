@@ -1,0 +1,752 @@
+import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import { createPageUrl } from "@/utils";
+import { base44 } from "@/api/base44Client";
+import { Mic, MicOff, Loader2, AlertCircle, CheckCircle } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { useToast } from "@/components/ui/use-toast";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+
+export default function VoiceCommand() {
+  const navigate = useNavigate();
+  const { toast } = useToast();
+  const [isListening, setIsListening] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [transcript, setTranscript] = useState("");
+  const [showDialog, setShowDialog] = useState(false);
+  const [recognition, setRecognition] = useState(null);
+  const [feedback, setFeedback] = useState(null);
+  const [needsClarification, setNeedsClarification] = useState(false);
+
+  useEffect(() => {
+    // Verificar se o navegador suporta Web Speech API
+    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      const recognitionInstance = new SpeechRecognition();
+      recognitionInstance.continuous = false;
+      recognitionInstance.interimResults = false;
+      recognitionInstance.lang = 'pt-BR';
+
+      recognitionInstance.onresult = (event) => {
+        const speechResult = event.results[0][0].transcript;
+        setTranscript(speechResult);
+        processVoiceCommand(speechResult);
+      };
+
+      recognitionInstance.onerror = (event) => {
+        console.error('Erro no reconhecimento de voz:', event.error);
+        setIsListening(false);
+        
+        let errorMessage = "Não foi possível capturar o áudio. Tente novamente.";
+        if (event.error === 'no-speech') {
+          errorMessage = "Não detectei nenhum áudio. Fale mais alto e tente novamente.";
+        } else if (event.error === 'audio-capture') {
+          errorMessage = "Não consegui acessar o microfone. Verifique as permissões.";
+        } else if (event.error === 'not-allowed') {
+          errorMessage = "Permissão de microfone negada. Habilite o acesso ao microfone.";
+        }
+        
+        setFeedback({ type: 'error', message: errorMessage });
+        setNeedsClarification(true);
+      };
+
+      recognitionInstance.onend = () => {
+        setIsListening(false);
+      };
+
+      setRecognition(recognitionInstance);
+    }
+  }, []);
+
+  const startListening = () => {
+    if (recognition) {
+      setTranscript("");
+      setFeedback(null);
+      setNeedsClarification(false);
+      setShowDialog(true);
+      setIsListening(true);
+      recognition.start();
+    } else {
+      toast({
+        title: "Não suportado",
+        description: "Seu navegador não suporta comandos de voz.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const stopListening = () => {
+    if (recognition) {
+      recognition.stop();
+    }
+    setIsListening(false);
+  };
+
+  const retryListening = () => {
+    setFeedback(null);
+    setNeedsClarification(false);
+    startListening();
+  };
+
+  const processVoiceCommand = async (command) => {
+    setIsProcessing(true);
+    
+    try {
+      // Buscar dados do usuário para contexto
+      const user = await base44.auth.me();
+      
+      // Buscar grupos do usuário
+      const allGroups = await base44.entities.Group.list();
+      const userGroups = allGroups.filter(g => 
+        g.admin_email === user.email || 
+        g.members?.some(m => m.email === user.email)
+      );
+      
+      const groupsList = userGroups.map(g => `${g.name} (ID: ${g.id})`).join(', ');
+      
+      // Usar IA para entender o comando de forma natural e informal
+      const response = await base44.integrations.Core.InvokeLLM({
+        prompt: `Você é um assistente inteligente de voz para o app de finanças pessoais "FinanShare".
+        
+**Seu objetivo:** Interpretar comandos de voz informais e naturais dos usuários e convertê-los em ações estruturadas.
+
+**Contexto do Usuário:**
+- Nome: ${user.full_name}
+- Email: ${user.email}
+- Grupos disponíveis: ${groupsList || 'Nenhum grupo'}
+
+**Comando do Usuário:** "${command}"
+
+**Funcionalidades que você pode executar:**
+
+1. **ADICIONAR DESPESA**: Criar uma nova despesa
+   - Exemplos: "adiciona um gasto de 50 reais", "comprei café por 15 reais", "gastei 200 em supermercado", "marquei 80 de uber hoje"
+   - Exemplos de GRUPO: "gastei 100 reais no grupo Casa Familiar", "adiciona 50 de pizza no grupo Família", "comprei 200 pro grupo trabalho"
+   - Parâmetros: título, valor, categoria, descrição, data, nome_grupo (se mencionado)
+   
+2. **CRIAR GRUPO**: Criar um grupo para dividir despesas
+   - Exemplos: "cria um grupo novo", "quero fazer um grupo chamado Família", "novo grupo para a república"
+   - Parâmetros: nome do grupo, descrição
+
+3. **REGISTRAR DÍVIDA**: Adicionar uma dívida a pagar
+   - Exemplos: "tenho uma dívida de 500", "preciso pagar 100 de cartão", "devo 300 pro banco"
+   - Parâmetros: título, valor, data de vencimento, tipo
+
+4. **MARCAR DÍVIDA COMO PAGA**: Quitar uma dívida
+   - Exemplos: "paguei a dívida do cartão", "quitar a conta de luz", "já paguei aquela dívida"
+
+5. **CRIAR META**: Definir uma meta financeira
+   - Exemplos: "quero juntar 1000 reais", "criar meta de 5000 pra viagem", "guardar dinheiro pra um carro"
+   - Parâmetros: nome, valor alvo, prazo, se é de grupo
+
+6. **ADICIONAR CONTRIBUIÇÃO**: Contribuir para uma meta
+   - Exemplos: "juntei 200 para meta Comprar TV", "adicionar contribuição de 100 para meta Viagem", "guardei 50 na meta Carro"
+   - Parâmetros: nome da meta (IMPORTANTE: extrair o nome específico da meta mencionada), valor
+
+7. **ATUALIZAR PERFIL**: Modificar configurações do usuário
+   - Exemplos: "meu orçamento mensal é 3000", "quero economizar 500 por mês", "mudar meta de economia"
+   - Parâmetros: orçamento mensal, meta de economia
+
+8. **VER INSIGHTS**: Visualizar análise inteligente dos gastos
+   - Exemplos: "mostra meus insights", "analisa meus gastos", "como estão minhas finanças"
+
+9. **VER RELATÓRIOS**: Acessar relatórios detalhados
+   - Exemplos: "relatório dos gastos", "mostrar relatório", "ver minhas estatísticas"
+
+10. **ATUALIZAR SALDO**: Modificar diretamente o saldo atual do usuário (current_balance)
+   - Exemplos ADICIONAR (entrada de dinheiro): "ganhei 80 reais", "adicionar 300 no saldo", "500 reais na carteira", "recebi 1000", "entrou 200"
+   - Exemplos DEFINIR (setar valor exato): "meu saldo agora é 500", "saldo para 800 reais"
+   - Exemplos SUBTRAIR (retirada): "remover 50 do saldo", "tirar 30 da carteira"
+   - Parâmetros: valor, operacao ("definir" | "adicionar" | "subtrair"), descricao
+   - **IMPORTANTE**: Palavras como "ganhei", "recebi", "entrou", "adicionar", "colocar" = SEMPRE "adicionar"
+
+**CATEGORIAS VÁLIDAS:** alimentacao, moradia, transporte, lazer, saude, educacao, vestuario, outros
+
+**TIPOS DE DÍVIDA VÁLIDOS:** credit_card, loan, bill, other
+
+**Sua tarefa:**
+
+1. **Entenda a intenção** do usuário mesmo que ele fale de forma informal, com gírias ou erros
+2. **Extraia parâmetros** relevantes (valores, datas, nomes, categorias)
+3. **IMPORTANTE para despesas de GRUPO:**
+   - Se o usuário mencionar um nome de grupo (ex: "Casa Familiar", "Família", "Trabalho"), extraia o nome e coloque em "nome_grupo"
+   - Defina "is_grupo" como true se o usuário mencionar um grupo
+4. **IMPORTANTE para ATUALIZAR SALDO:**
+   - operacao = "adicionar" quando usar: "ganhei", "recebi", "entrou", "adicionar", "colocar", "somar", "aumentar", "ganho", "entrada"
+   - operacao = "definir" SOMENTE quando o usuário explicitar que quer SETAR o valor (ex: "saldo É 500", "saldo PARA 1000", "definir saldo")
+   - operacao = "subtrair" quando disser: "tirar", "remover", "descontar", "diminuir", "saiu", "retirar"
+5. **Infira informações faltantes** quando possível (ex: se não disser a categoria, tente deduzir do contexto)
+6. **Classifique a clareza** do comando:
+   - "claro": comando perfeitamente compreensível
+   - "ambiguo": comando compreensível mas falta algum detalhe importante
+   - "incoerente": comando incompreensível ou muito vago
+
+Se o comando for **incoerente**, forneça uma mensagem de ajuda específica pedindo mais clareza.
+
+**IMPORTANTE:** 
+- Use a data de hoje (${new Date().toISOString().split('T')[0]}) se não houver data especificada
+- Para valores monetários, aceite formatos diversos: "50 reais", "R$50", "cinquenta reais", etc
+- Seja tolerante com erros de português e gírias
+- Se o usuário mencionar "último", "ontem", "hoje", adapte as datas adequadamente
+
+Responda em JSON:`,
+        response_json_schema: {
+          type: "object",
+          properties: {
+            clareza: { 
+              type: "string",
+              enum: ["claro", "ambiguo", "incoerente"]
+            },
+            acao: { 
+              type: "string",
+              enum: [
+                "adicionar_despesa", "editar_despesa", "criar_grupo", 
+                "registrar_divida", "editar_divida", "marcar_divida_paga",
+                "criar_meta", "adicionar_contribuicao", "atualizar_perfil",
+                "ver_insights", "ver_relatorios", "exportar_dados", "ajuda",
+                "atualizar_saldo"
+              ]
+            },
+            parametros: {
+              type: "object",
+              properties: {
+                titulo: { type: "string" },
+                valor: { type: "number" },
+                descricao: { type: "string" },
+                categoria: { type: "string" },
+                data: { type: "string" },
+                tipo: { type: "string" },
+                nome: { type: "string" },
+                is_grupo: { type: "boolean" },
+                nome_grupo: { type: "string" },
+                orcamento_mensal: { type: "number" },
+                meta_economia: { type: "number" },
+                operacao: { type: "string", enum: ["definir", "adicionar", "subtrair"] }
+              }
+            },
+            confirmacao: { type: "string" },
+            mensagem_clarificacao: { type: "string" }
+          },
+          required: ["clareza", "acao", "parametros", "confirmacao"]
+        }
+      });
+
+      // Verificar se precisa de clarificação
+      if (response.clareza === "incoerente") {
+        setFeedback({
+          type: 'warning',
+          message: response.mensagem_clarificacao || "Não consegui entender. Pode repetir de forma mais clara?"
+        });
+        setNeedsClarification(true);
+        setIsProcessing(false);
+        return;
+      }
+
+      if (response.clareza === "ambiguo") {
+        setFeedback({
+          type: 'info',
+          message: response.mensagem_clarificacao || "Entendi parcialmente. Vou prosseguir com o que consegui captar."
+        });
+      }
+
+      // Executar a ação identificada
+      await executeAction(response.acao, response.parametros, response.confirmacao, userGroups);
+      
+    } catch (error) {
+      console.error("Erro ao processar comando:", error);
+      setFeedback({
+        type: 'error',
+        message: "Ocorreu um erro ao processar seu comando. Tente novamente."
+      });
+      setNeedsClarification(true);
+    }
+    
+    setIsProcessing(false);
+  };
+
+  const executeAction = async (action, params, confirmationMessage, userGroups) => {
+    try {
+      const user = await base44.auth.me();
+      
+      switch (action) {
+        case "adicionar_despesa":
+          // Determinar se é despesa de grupo
+          let groupId = null;
+          let splitBetween = [];
+          
+          if (params.is_grupo && params.nome_grupo && userGroups.length > 0) {
+            // Buscar grupo pelo nome (case insensitive)
+            const foundGroup = userGroups.find(g => 
+              g.name.toLowerCase().includes(params.nome_grupo.toLowerCase()) ||
+              params.nome_grupo.toLowerCase().includes(g.name.toLowerCase())
+            );
+            
+            if (foundGroup) {
+              groupId = foundGroup.id;
+              splitBetween = [
+                foundGroup.admin_email,
+                ...(foundGroup.members?.map(m => m.email) || [])
+              ];
+            }
+          }
+          
+          // Criar despesa com os parâmetros extraídos
+          const expenseData = {
+            title: params.titulo || "Despesa sem título",
+            amount: params.valor || 0,
+            category: params.categoria || "outros",
+            description: params.descricao || "",
+            date: params.data || new Date().toISOString().split('T')[0],
+            is_group_expense: !!groupId,
+            group_id: groupId,
+            paid_by: user.email,
+            split_between: splitBetween.length > 0 ? splitBetween : undefined,
+            amount_per_person: groupId ? (params.valor || 0) / splitBetween.length : (params.valor || 0)
+          };
+          
+          await base44.entities.Expense.create(expenseData);
+          
+          // Atualizar total_expenses do grupo se for despesa de grupo
+          if (groupId) {
+            const groupExpenses = await base44.entities.Expense.filter({ group_id: groupId });
+            const totalExpenses = groupExpenses.reduce((sum, exp) => sum + exp.amount, 0);
+            await base44.entities.Group.update(groupId, { total_expenses: totalExpenses });
+          }
+          
+          // Atualizar saldo atual do usuário (diminuir)
+          const currentBalance = user.current_balance || 0;
+          const newBalance = currentBalance - (params.valor || 0);
+          const balanceHistoryEntry = {
+            date: new Date().toISOString(),
+            amount: -(params.valor || 0),
+            previous_balance: currentBalance,
+            new_balance: newBalance,
+            type: "expense",
+            description: `Despesa: ${params.titulo || "Sem título"}`
+          };
+          await base44.auth.updateMe({
+            current_balance: newBalance,
+            balance_history: [...(user.balance_history || []), balanceHistoryEntry]
+          });
+          
+          toast({
+            title: "✅ Despesa Adicionada!",
+            description: confirmationMessage,
+            className: "bg-green-100 text-green-800",
+          });
+          setShowDialog(false);
+          navigate(createPageUrl("Personal"));
+          break;
+
+        case "criar_grupo":
+          // Gerar código de convite
+          const inviteCode = Math.random().toString(36).substr(2, 8).toUpperCase();
+          
+          await base44.entities.Group.create({
+            name: params.nome || "Novo Grupo",
+            description: params.descricao || "",
+            admin_email: user.email,
+            invite_code: inviteCode,
+            members: [],
+            total_expenses: 0
+          });
+          
+          toast({
+            title: "✅ Grupo Criado!",
+            description: confirmationMessage,
+            className: "bg-green-100 text-green-800",
+          });
+          setShowDialog(false);
+          navigate(createPageUrl("Groups"));
+          break;
+
+        case "registrar_divida":
+          await base44.entities.Debt.create({
+            title: params.titulo || "Dívida",
+            amount: params.valor || 0,
+            due_date: params.data || new Date().toISOString().split('T')[0],
+            type: params.tipo || "other",
+            status: "pending"
+          });
+          
+          // Atualizar saldo atual do usuário (diminuir)
+          const debtCurrentBalance = user.current_balance || 0;
+          const debtNewBalance = debtCurrentBalance - (params.valor || 0);
+          const debtHistoryEntry = {
+            date: new Date().toISOString(),
+            amount: -(params.valor || 0),
+            previous_balance: debtCurrentBalance,
+            new_balance: debtNewBalance,
+            type: "debt",
+            description: `Dívida: ${params.titulo || "Dívida"}`
+          };
+          await base44.auth.updateMe({
+            current_balance: debtNewBalance,
+            balance_history: [...(user.balance_history || []), debtHistoryEntry]
+          });
+          
+          toast({
+            title: "✅ Dívida Registrada!",
+            description: confirmationMessage,
+            className: "bg-green-100 text-green-800",
+          });
+          setShowDialog(false);
+          navigate(createPageUrl("Debts"));
+          break;
+
+        case "marcar_divida_paga":
+          // Buscar última dívida pendente
+          const pendingDebts = await base44.entities.Debt.filter({ status: "pending" }, "-created_date", 1);
+          if (pendingDebts.length > 0) {
+            const debtToPay = pendingDebts[0];
+            await base44.entities.Debt.update(debtToPay.id, { status: "paid" });
+            
+            // Subtrair o valor da dívida do saldo atual (está pagando a dívida)
+            const payDebtBalance = user.current_balance || 0;
+            const payDebtNewBalance = payDebtBalance - debtToPay.amount;
+            const payDebtHistoryEntry = {
+              date: new Date().toISOString(),
+              amount: -debtToPay.amount,
+              previous_balance: payDebtBalance,
+              new_balance: payDebtNewBalance,
+              type: "debt_payment",
+              description: `Pagamento de dívida: ${debtToPay.title}`
+            };
+            await base44.auth.updateMe({
+              current_balance: payDebtNewBalance,
+              balance_history: [...(user.balance_history || []), payDebtHistoryEntry]
+            });
+            
+            toast({
+              title: "✅ Dívida Marcada como Paga!",
+              description: confirmationMessage,
+              className: "bg-green-100 text-green-800",
+            });
+          } else {
+            toast({
+              title: "⚠️ Nenhuma dívida pendente",
+              description: "Você não tem dívidas pendentes para marcar como pagas.",
+              variant: "default",
+            });
+          }
+          setShowDialog(false);
+          navigate(createPageUrl("Debts"));
+          break;
+
+        case "criar_meta":
+          await base44.entities.Goal.create({
+            name: params.nome || "Nova Meta",
+            target_amount: params.valor || 1000,
+            current_amount: 0,
+            deadline: params.data || null,
+            type: params.is_grupo ? "group" : "personal",
+            status: "active",
+            description: params.descricao || "",
+            participants: []
+          });
+          
+          toast({
+            title: "✅ Meta Criada!",
+            description: confirmationMessage,
+            className: "bg-green-100 text-green-800",
+          });
+          setShowDialog(false);
+          navigate(createPageUrl("Goals"));
+          break;
+
+        case "adicionar_contribuicao":
+          // Buscar meta específica se nome foi mencionado, senão buscar a última ativa
+          let goalToContribute = null;
+          const allActiveGoals = await base44.entities.Goal.filter({ status: "active" });
+          
+          if (params.nome && allActiveGoals.length > 0) {
+            // Tentar encontrar meta pelo nome (case insensitive)
+            goalToContribute = allActiveGoals.find(g => 
+              g.name.toLowerCase().includes(params.nome.toLowerCase()) ||
+              params.nome.toLowerCase().includes(g.name.toLowerCase())
+            );
+          }
+          
+          // Se não encontrou pelo nome ou nome não foi fornecido, usar a última meta ativa
+          if (!goalToContribute && allActiveGoals.length > 0) {
+            goalToContribute = allActiveGoals.sort((a, b) => new Date(b.created_date) - new Date(a.created_date))[0];
+          }
+          
+          if (goalToContribute) {
+            const goal = goalToContribute;
+            const currentUser = await base44.auth.me();
+            
+            // Criar contribuição
+            await base44.entities.Contribution.create({
+              goal_id: goal.id,
+              amount: params.valor || 0,
+              description: params.descricao || "Contribuição por voz",
+              date: new Date().toISOString().split('T')[0],
+              contributor_email: currentUser.email,
+              contributor_name: currentUser.full_name
+            });
+            
+            // Atualizar meta
+            await base44.entities.Goal.update(goal.id, {
+              current_amount: goal.current_amount + (params.valor || 0)
+            });
+            
+            // Atualizar saldo atual do usuário (diminuir)
+            const contribCurrentBalance = currentUser.current_balance || 0;
+            const contribNewBalance = contribCurrentBalance - (params.valor || 0);
+            const contribHistoryEntry = {
+              date: new Date().toISOString(),
+              amount: -(params.valor || 0),
+              previous_balance: contribCurrentBalance,
+              new_balance: contribNewBalance,
+              type: "goal_contribution",
+              description: `Contribuição: ${goal.name}`
+            };
+            await base44.auth.updateMe({
+              current_balance: contribNewBalance,
+              balance_history: [...(currentUser.balance_history || []), contribHistoryEntry]
+            });
+            
+            toast({
+              title: "✅ Contribuição Adicionada!",
+              description: confirmationMessage,
+              className: "bg-green-100 text-green-800",
+            });
+          } else {
+            toast({
+              title: "⚠️ Nenhuma meta encontrada",
+              description: "Crie uma meta primeiro antes de adicionar contribuições.",
+              variant: "default",
+            });
+          }
+          setShowDialog(false);
+          navigate(createPageUrl("Goals"));
+          break;
+
+        case "atualizar_perfil":
+          const updateData = {};
+          if (params.orcamento_mensal) updateData.monthly_budget = params.orcamento_mensal;
+          if (params.meta_economia) updateData.savings_goal = params.meta_economia;
+          
+          await base44.auth.updateMe(updateData);
+          
+          toast({
+            title: "✅ Perfil Atualizado!",
+            description: confirmationMessage,
+            className: "bg-green-100 text-green-800",
+          });
+          setShowDialog(false);
+          navigate(createPageUrl("Profile"));
+          break;
+
+        case "ver_insights":
+          toast({
+            title: "📊 Insights",
+            description: confirmationMessage,
+            className: "bg-blue-100 text-blue-800",
+          });
+          setShowDialog(false);
+          navigate(createPageUrl("Insights"));
+          break;
+
+        case "ver_relatorios":
+          toast({
+            title: "📈 Relatórios",
+            description: confirmationMessage,
+            className: "bg-purple-100 text-purple-800",
+          });
+          setShowDialog(false);
+          navigate(createPageUrl("Reports"));
+          break;
+
+        case "exportar_dados":
+          toast({
+            title: "💾 Exportar Dados",
+            description: "Acesse a página de relatórios para exportar seus dados.",
+            className: "bg-indigo-100 text-indigo-800",
+          });
+          setShowDialog(false);
+          navigate(createPageUrl("Reports"));
+          break;
+
+        case "atualizar_saldo":
+          const currentUser = await base44.auth.me();
+          const oldBalance = currentUser.current_balance || 0;
+          let newBalanceValue = oldBalance;
+
+          if (params.operacao === "definir") {
+            newBalanceValue = params.valor;
+          } else if (params.operacao === "adicionar") {
+            newBalanceValue = oldBalance + params.valor;
+          } else if (params.operacao === "subtrair") {
+            newBalanceValue = oldBalance - params.valor;
+          }
+
+          // Registrar no histórico
+          const historyEntry = {
+            date: new Date().toISOString(),
+            amount:
+              params.operacao === "subtrair"
+                ? -params.valor
+                : params.valor,
+            previous_balance: oldBalance,
+            new_balance: newBalanceValue,
+            type: "voice",
+            description: params.descricao || "Ajuste via comando de voz"
+          };
+
+          const updatedHistory = [
+            ...(currentUser.balance_history || []),
+            historyEntry
+          ];
+
+          // Atualizar no base44
+          await base44.auth.updateMe({
+            current_balance: newBalanceValue,
+            balance_history: updatedHistory
+          });
+
+          toast({
+            title: "💰 Saldo atualizado!",
+            description: confirmationMessage,
+            className: "bg-green-100 text-green-800"
+          });
+
+          setShowDialog(false);
+          navigate(createPageUrl("BalanceManagement"));
+          break;
+
+        case "ajuda":
+          toast({
+            title: "💡 Ajuda com Comandos de Voz",
+            description: confirmationMessage,
+            className: "bg-blue-100 text-blue-800",
+          });
+          setShowDialog(false);
+          break;
+
+        default:
+          toast({
+            title: "❓ Comando não reconhecido",
+            description: "Tente algo como: 'adicionar gasto de 50 reais', 'criar grupo', 'ver relatórios'",
+            variant: "default",
+          });
+          setShowDialog(false);
+      }
+    } catch (error) {
+      console.error("Erro ao executar ação:", error);
+      toast({
+        title: "Erro",
+        description: "Não foi possível executar a ação. Tente novamente.",
+        variant: "destructive",
+      });
+      setShowDialog(false);
+    }
+  };
+
+  return (
+    <>
+      <Button
+        onClick={startListening}
+        disabled={isListening || isProcessing}
+        className="fixed bottom-24 right-4 z-50 w-14 h-14 rounded-full shadow-lg bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white"
+        size="icon"
+      >
+        {isProcessing ? (
+          <Loader2 className="w-6 h-6 animate-spin" />
+        ) : isListening ? (
+          <MicOff className="w-6 h-6 animate-pulse" />
+        ) : (
+          <Mic className="w-6 h-6" />
+        )}
+      </Button>
+
+      <Dialog open={showDialog} onOpenChange={setShowDialog}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Mic className="w-5 h-5 text-purple-600" />
+              Comando de Voz
+            </DialogTitle>
+            <DialogDescription>
+              {isListening 
+                ? "🎤 Estou ouvindo... Fale agora!" 
+                : isProcessing 
+                  ? "🧠 Processando seu comando..." 
+                  : "Clique no botão para começar"}
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="space-y-4">
+            {isListening && !feedback && (
+              <div className="flex justify-center">
+                <div className="w-16 h-16 bg-purple-100 rounded-full flex items-center justify-center animate-pulse">
+                  <Mic className="w-8 h-8 text-purple-600" />
+                </div>
+              </div>
+            )}
+            
+            {transcript && (
+              <div className="p-3 bg-gray-100 rounded-lg">
+                <p className="text-sm font-medium text-gray-700">Você disse:</p>
+                <p className="text-sm text-gray-900 mt-1">"{transcript}"</p>
+              </div>
+            )}
+            
+            {feedback && (
+              <Alert className={
+                feedback.type === 'error' ? 'border-red-300 bg-red-50' :
+                feedback.type === 'warning' ? 'border-orange-300 bg-orange-50' :
+                feedback.type === 'success' ? 'border-green-300 bg-green-50' :
+                'border-blue-300 bg-blue-50'
+              }>
+                {feedback.type === 'error' && <AlertCircle className="h-4 w-4 text-red-600" />}
+                {feedback.type === 'warning' && <AlertCircle className="h-4 w-4 text-orange-600" />}
+                {feedback.type === 'success' && <CheckCircle className="h-4 w-4 text-green-600" />}
+                {feedback.type === 'info' && <AlertCircle className="h-4 w-4 text-blue-600" />}
+                <AlertDescription className={
+                  feedback.type === 'error' ? 'text-red-800' :
+                  feedback.type === 'warning' ? 'text-orange-800' :
+                  feedback.type === 'success' ? 'text-green-800' :
+                  'text-blue-800'
+                }>
+                  {feedback.message}
+                </AlertDescription>
+              </Alert>
+            )}
+            
+            <div className="flex gap-2">
+              {isListening && (
+                <Button onClick={stopListening} variant="outline" className="flex-1">
+                  Parar de Ouvir
+                </Button>
+              )}
+              
+              {needsClarification && !isListening && (
+                <Button onClick={retryListening} className="flex-1 bg-purple-600 hover:bg-purple-700">
+                  <Mic className="w-4 h-4 mr-2" />
+                  Tentar Novamente
+                </Button>
+              )}
+            </div>
+            
+            {!isListening && !isProcessing && !needsClarification && (
+              <div className="text-xs text-gray-500 space-y-1">
+                <p className="font-medium">💡 Exemplos de comandos:</p>
+                <ul className="list-disc list-inside space-y-0.5 text-gray-600">
+                  <li>"Gastei 50 reais no almoço"</li>
+                  <li>"Adiciona 100 de pizza no grupo Casa"</li>
+                  <li>"Coloca 3000 na minha carteira"</li>
+                  <li>"Criar grupo Família"</li>
+                  <li>"Devo 200 no cartão"</li>
+                  <li>"Quero juntar 5000 reais"</li>
+                </ul>
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}

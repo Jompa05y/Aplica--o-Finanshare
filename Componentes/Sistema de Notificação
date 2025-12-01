@@ -1,0 +1,206 @@
+import React, { useEffect, useState } from "react";
+import { base44 } from "@/api/base44Client";
+import { differenceInDays, format } from "date-fns";
+import { ptBR } from "date-fns/locale";
+import { useToast } from "@/components/ui/use-toast";
+import { Bell, AlertTriangle, Calendar, CreditCard } from "lucide-react";
+
+export default function NotificationSystem() {
+  const { toast } = useToast();
+  const [hasChecked, setHasChecked] = useState(false);
+
+  useEffect(() => {
+    // Verificar notificações apenas uma vez por sessão
+    if (!hasChecked) {
+      checkNotifications();
+      setHasChecked(true);
+    }
+
+    // Verificar a cada 30 minutos se há novas notificações
+    const interval = setInterval(() => {
+      checkNotifications();
+    }, 30 * 60 * 1000); // 30 minutos
+
+    return () => clearInterval(interval);
+  }, [hasChecked]);
+
+  const checkNotifications = async () => {
+    try {
+      const user = await base44.auth.me();
+      
+      // Verificar se o usuário tem notificações habilitadas
+      if (user.notifications_enabled === false) {
+        return;
+      }
+
+      // 1. Verificar dívidas próximas do vencimento
+      await checkUpcomingDebts(user);
+
+      // 2. Verificar orçamento mensal
+      await checkMonthlyBudget(user);
+
+      // 3. Verificar metas próximas do prazo
+      await checkGoalDeadlines(user);
+
+    } catch (error) {
+      console.error("Erro ao verificar notificações:", error);
+    }
+  };
+
+  const checkUpcomingDebts = async (user) => {
+    const debts = await base44.entities.Debt.filter({ 
+      created_by: user.email, 
+      status: "pending" 
+    });
+
+    const today = new Date();
+
+    debts.forEach(debt => {
+      const dueDate = new Date(debt.due_date);
+      const daysUntilDue = differenceInDays(dueDate, today);
+
+      // Notificar dívidas que vencem em 3 dias ou menos
+      if (daysUntilDue <= 3 && daysUntilDue >= 0) {
+        toast({
+          title: "⏰ Vencimento Próximo!",
+          description: (
+            <div className="flex flex-col gap-2">
+              <p className="font-semibold">{debt.title}</p>
+              <div className="flex items-center gap-2 text-sm">
+                <Calendar className="w-4 h-4" />
+                <span>Vence em {daysUntilDue} dia(s) - {format(dueDate, "dd/MM/yyyy", { locale: ptBR })}</span>
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <CreditCard className="w-4 h-4" />
+                <span className="font-bold">R$ {debt.amount.toLocaleString('pt-BR')}</span>
+              </div>
+            </div>
+          ),
+          className: "bg-orange-100 border-orange-400",
+          duration: 8000,
+        });
+      }
+
+      // Notificar dívidas vencidas
+      if (daysUntilDue < 0) {
+        toast({
+          title: "🚨 Dívida Vencida!",
+          description: (
+            <div className="flex flex-col gap-2">
+              <p className="font-semibold">{debt.title}</p>
+              <div className="flex items-center gap-2 text-sm">
+                <AlertTriangle className="w-4 h-4" />
+                <span>Venceu há {Math.abs(daysUntilDue)} dia(s)</span>
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <CreditCard className="w-4 h-4" />
+                <span className="font-bold">R$ {debt.amount.toLocaleString('pt-BR')}</span>
+              </div>
+            </div>
+          ),
+          className: "bg-red-100 border-red-400",
+          duration: 10000,
+        });
+      }
+    });
+  };
+
+  const checkMonthlyBudget = async (user) => {
+    if (!user.monthly_budget) return;
+
+    // Pegar gastos do mês atual
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    
+    const expenses = await base44.entities.Expense.filter({ 
+      created_by: user.email 
+    });
+    
+    const monthlyExpenses = expenses.filter(expense => 
+      new Date(expense.date) >= startOfMonth
+    );
+    
+    const totalSpent = monthlyExpenses.reduce((sum, exp) => sum + exp.amount, 0);
+    const budgetPercentage = (totalSpent / user.monthly_budget) * 100;
+
+    // Notificar quando atingir 80% do orçamento
+    if (budgetPercentage >= 80 && budgetPercentage < 100) {
+      toast({
+        title: "⚠️ Atenção ao Orçamento!",
+        description: (
+          <div className="flex flex-col gap-2">
+            <p>Você já gastou <span className="font-bold">{budgetPercentage.toFixed(0)}%</span> do seu orçamento mensal.</p>
+            <p className="text-sm">R$ {totalSpent.toLocaleString('pt-BR')} de R$ {user.monthly_budget.toLocaleString('pt-BR')}</p>
+          </div>
+        ),
+        className: "bg-yellow-100 border-yellow-400",
+        duration: 8000,
+      });
+    }
+
+    // Notificar quando ultrapassar o orçamento
+    if (budgetPercentage >= 100) {
+      toast({
+        title: "🚨 Orçamento Ultrapassado!",
+        description: (
+          <div className="flex flex-col gap-2">
+            <p>Você ultrapassou seu orçamento mensal em <span className="font-bold">{(budgetPercentage - 100).toFixed(0)}%</span>!</p>
+            <p className="text-sm">R$ {totalSpent.toLocaleString('pt-BR')} de R$ {user.monthly_budget.toLocaleString('pt-BR')}</p>
+          </div>
+        ),
+        className: "bg-red-100 border-red-400",
+        duration: 10000,
+      });
+    }
+  };
+
+  const checkGoalDeadlines = async (user) => {
+    const goals = await base44.entities.Goal.filter({ 
+      created_by: user.email,
+      status: "active"
+    });
+
+    const today = new Date();
+
+    goals.forEach(goal => {
+      if (!goal.deadline) return;
+
+      const deadline = new Date(goal.deadline);
+      const daysUntilDeadline = differenceInDays(deadline, today);
+      const progressPercentage = (goal.current_amount / goal.target_amount) * 100;
+
+      // Notificar metas próximas do prazo com progresso baixo
+      if (daysUntilDeadline <= 7 && daysUntilDeadline >= 0 && progressPercentage < 50) {
+        toast({
+          title: "🎯 Meta Próxima do Prazo!",
+          description: (
+            <div className="flex flex-col gap-2">
+              <p className="font-semibold">{goal.name}</p>
+              <p className="text-sm">Faltam {daysUntilDeadline} dia(s) e você está apenas {progressPercentage.toFixed(0)}% completo.</p>
+              <p className="text-sm">R$ {goal.current_amount.toLocaleString('pt-BR')} de R$ {goal.target_amount.toLocaleString('pt-BR')}</p>
+            </div>
+          ),
+          className: "bg-blue-100 border-blue-400",
+          duration: 8000,
+        });
+      }
+
+      // Notificar quando a meta for concluída
+      if (progressPercentage >= 100) {
+        toast({
+          title: "🎉 Meta Alcançada!",
+          description: (
+            <div className="flex flex-col gap-2">
+              <p className="font-semibold">{goal.name}</p>
+              <p className="text-sm">Parabéns! Você atingiu sua meta de R$ {goal.target_amount.toLocaleString('pt-BR')}!</p>
+            </div>
+          ),
+          className: "bg-green-100 border-green-400",
+          duration: 10000,
+        });
+      }
+    });
+  };
+
+  return null; // Este componente não renderiza nada visualmente
+}

@@ -1,0 +1,157 @@
+import React, { useState } from "react";
+import { Group } from "@/entities/Group";
+import { User } from "@/entities/User";
+import { useNavigate } from "react-router-dom";
+import { createPageUrl } from "@/utils";
+import { ArrowLeft, Save, Users } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+
+export default function CreateGroup() {
+  const navigate = useNavigate();
+  const [isLoading, setIsLoading] = useState(false);
+  const [group, setGroup] = useState({
+    name: "",
+    description: ""
+  });
+
+  const generateInviteCode = () => {
+    return Math.random().toString(36).substr(2, 8).toUpperCase();
+  };
+
+  const handleInputChange = (field, value) => {
+    setGroup(prev => ({
+      ...prev,
+      [field]: value
+    }));
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setIsLoading(true);
+
+    try {
+      const user = await User.me();
+      const inviteCode = generateInviteCode();
+
+      const groupData = {
+        ...group,
+        admin_email: user.email,
+        invite_code: inviteCode,
+        members: [], // Iniciar sem membros
+        total_expenses: 0
+      };
+
+      await Group.create(groupData);
+      navigate(createPageUrl("Groups"));
+    } catch (error) {
+      console.error("Erro ao criar grupo:", error);
+    }
+    setIsLoading(false);
+  };
+
+  return (
+    <div className="p-4 max-w-md mx-auto">
+      {/* Header */}
+      <div className="flex items-center gap-4 mb-6">
+        <Button 
+          variant="ghost" 
+          size="icon"
+          onClick={() => navigate(createPageUrl("Groups"))}
+        >
+          <ArrowLeft className="w-5 h-5" />
+        </Button>
+        <div>
+          <h1 className="text-xl font-bold text-gray-800">Criar Grupo</h1>
+          <p className="text-sm text-gray-600">Configure um novo grupo para dividir despesas</p>
+        </div>
+      </div>
+
+      <form onSubmit={handleSubmit} className="space-y-6">
+        {/* Group Info */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Users className="w-5 h-5" />
+              Informações do Grupo
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <Label htmlFor="name">Nome do Grupo</Label>
+              <Input
+                id="name"
+                placeholder="Ex: Casa dos Amigos, Família Silva..."
+                value={group.name}
+                onChange={(e) => handleInputChange("name", e.target.value)}
+                required
+                className="mt-1"
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="description">Descrição (opcional)</Label>
+              <Textarea
+                id="description"
+                placeholder="Descreva o propósito do grupo..."
+                value={group.description}
+                onChange={(e) => handleInputChange("description", e.target.value)}
+                className="mt-1"
+                rows={3}
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Preview */}
+        <Card className="bg-gradient-to-r from-emerald-50 to-blue-50">
+          <CardContent className="p-4">
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 bg-gradient-to-r from-emerald-500 to-blue-500 rounded-lg flex items-center justify-center">
+                <Users className="w-6 h-6 text-white" />
+              </div>
+              <div className="flex-1">
+                <p className="font-medium text-gray-900">
+                  {group.name || "Nome do grupo"}
+                </p>
+                <p className="text-sm text-gray-600">
+                  {group.description || "Sem descrição"}
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Info */}
+        <Card className="bg-blue-50 border-blue-200">
+          <CardContent className="p-4">
+            <h3 className="font-medium text-blue-800 mb-2">📋 Como funciona:</h3>
+            <ul className="text-sm text-blue-700 space-y-1">
+              <li>• Você será o administrador do grupo</li>
+              <li>• Um código de convite será gerado automaticamente</li>
+              <li>• Compartilhe o código para outros entrarem no grupo</li>
+              <li>• Todas as despesas serão divididas igualmente</li>
+            </ul>
+          </CardContent>
+        </Card>
+
+        {/* Submit Button */}
+        <Button 
+          type="submit" 
+          disabled={isLoading || !group.name.trim()}
+          className="w-full bg-emerald-600 hover:bg-emerald-700 h-12"
+        >
+          {isLoading ? (
+            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2" />
+          ) : (
+            <Save className="w-5 h-5 mr-2" />
+          )}
+          {isLoading ? "Criando..." : "Criar Grupo"}
+        </Button>
+      </form>
+    </div>
+  );
+}

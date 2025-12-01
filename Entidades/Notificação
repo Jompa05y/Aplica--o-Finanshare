@@ -1,0 +1,58 @@
+{
+  "name": "Notification",
+  "type": "object",
+  "properties": {
+    "recipient_email": {
+      "type": "string",
+      "description": "Email do destinatário da notificação"
+    },
+    "title": {
+      "type": "string",
+      "description": "Título da notificação"
+    },
+    "message": {
+      "type": "string",
+      "description": "Mensagem da notificação"
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "expense_added",
+        "balance_updated",
+        "debt_reminder",
+        "group_update",
+        "high_expense",
+        "member_joined",
+        "goal_completed"
+      ],
+      "description": "Tipo da notificação"
+    },
+    "is_read": {
+      "type": "boolean",
+      "default": false,
+      "description": "Se a notificação foi lida"
+    },
+    "related_id": {
+      "type": "string",
+      "description": "ID do item relacionado (despesa, grupo, etc)"
+    },
+    "icon": {
+      "type": "string",
+      "description": "Ícone da notificação"
+    }
+  },
+  "required": [
+    "recipient_email",
+    "title",
+    "message",
+    "type"
+  ],
+  "rls": {
+    "read": {
+      "data.recipient_email": "{{user.email}}"
+    },
+    "write": {
+      "created_by": "{{user.email}}"
+    }
+  }
+}

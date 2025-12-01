@@ -1,0 +1,119 @@
+import React, { useState } from "react";
+import { base44 } from "@/api/base44Client";
+import { Eye, EyeOff, Wallet, TrendingUp, TrendingDown } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { useToast } from "@/components/ui/use-toast";
+
+export default function BalanceCard({ user, onUpdate, className = "" }) {
+  const { toast } = useToast();
+  const [isVisible, setIsVisible] = useState(user?.balance_visible ?? true);
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
+
+  const toggleVisibility = async () => {
+    setIsUpdating(true);
+    try {
+      const newVisibility = !isVisible;
+      await base44.auth.updateMe({ balance_visible: newVisibility });
+      setIsVisible(newVisibility);
+      if (onUpdate) onUpdate();
+    } catch (error) {
+      console.error("Erro ao alterar visibilidade:", error);
+      toast({
+        title: "Erro",
+        description: "Não foi possível alterar a visibilidade do saldo.",
+        variant: "destructive",
+      });
+    }
+    setIsUpdating(false);
+  };
+
+  const balance = user?.current_balance || 0;
+  const isPositive = balance >= 0;
+  const isZero = balance === 0;
+
+  return (
+    <div
+      className={`relative bg-gradient-to-br from-emerald-500 via-emerald-400 to-green-400 text-white rounded-3xl shadow-2xl transition-all duration-300 ease-in-out ${
+        isFocused ? "opacity-100 scale-[1.02]" : "opacity-90 hover:opacity-100"
+      } ${className}`}
+      onClick={() => setIsFocused(true)}
+      onMouseEnter={() => setIsFocused(true)}
+      onMouseLeave={() => setIsFocused(false)}
+      style={{
+        backdropFilter: "blur(10px)",
+        boxShadow: isFocused
+          ? "0 20px 40px rgba(16, 185, 129, 0.4)"
+          : "0 10px 30px rgba(16, 185, 129, 0.3)",
+      }}
+    >
+      <div className="p-6">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-white/20 rounded-2xl flex items-center justify-center backdrop-blur-sm">
+              <Wallet className="w-6 h-6" />
+            </div>
+            <span className="text-sm font-semibold tracking-wide opacity-90">
+              Saldo Atual
+            </span>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleVisibility();
+            }}
+            disabled={isUpdating}
+            className="h-10 w-10 hover:bg-white/20 text-white transition-all duration-200 rounded-xl"
+          >
+            {isVisible ? (
+              <Eye className="w-5 h-5" />
+            ) : (
+              <EyeOff className="w-5 h-5" />
+            )}
+          </Button>
+        </div>
+
+        <div className="flex items-center gap-3 mb-3">
+          {isVisible ? (
+            <>
+              <span className="text-4xl font-bold tracking-tight">
+                R${" "}
+                {balance.toLocaleString("pt-BR", {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}
+              </span>
+              {!isZero && (
+                <div
+                  className={`p-2 rounded-full ${
+                    isPositive ? "bg-green-400/30" : "bg-red-400/30"
+                  }`}
+                >
+                  {isPositive ? (
+                    <TrendingUp className="w-5 h-5" />
+                  ) : (
+                    <TrendingDown className="w-5 h-5" />
+                  )}
+                </div>
+              )}
+            </>
+          ) : (
+            <span className="text-4xl font-bold tracking-wider">••••••</span>
+          )}
+        </div>
+
+        <p className="text-xs opacity-80 font-medium">
+          {isZero && isVisible
+            ? "Aguardando suas primeiras movimentações"
+            : "Atualizado automaticamente com suas movimentações"}
+        </p>
+      </div>
+
+      {/* Detalhe decorativo */}
+      <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full blur-3xl -z-10" />
+      <div className="absolute bottom-0 left-0 w-24 h-24 bg-emerald-600/20 rounded-full blur-2xl -z-10" />
+    </div>
+  );
+}

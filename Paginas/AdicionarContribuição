@@ -1,0 +1,149 @@
+import React, { useState, useEffect } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { Goal } from "@/entities/Goal";
+import { Contribution } from "@/entities/Contribution";
+import { User } from "@/entities/User";
+import { createPageUrl } from "@/utils";
+import { ArrowLeft, Save, Coins } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useToast } from "@/components/ui/use-toast";
+
+export default function AddContribution() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { toast } = useToast();
+  const [goal, setGoal] = useState(null);
+  const [user, setUser] = useState(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [contribution, setContribution] = useState({
+    amount: "",
+    description: "",
+  });
+
+  const goalId = new URLSearchParams(location.search).get("goalId");
+
+  useEffect(() => {
+    const loadData = async () => {
+      if (!goalId) {
+        navigate(createPageUrl("Goals"));
+        return;
+      }
+      const userData = await User.me();
+      setUser(userData);
+      const goalData = await Goal.get(goalId);
+      setGoal(goalData);
+    };
+    loadData();
+  }, [goalId, navigate]);
+
+  const handleInputChange = (field, value) => {
+    setContribution(prev => ({ ...prev, [field]: value }));
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setIsLoading(true);
+    const amount = parseFloat(contribution.amount);
+
+    try {
+      // 1. Create the contribution record
+      await Contribution.create({
+        goal_id: goal.id,
+        amount: amount,
+        description: contribution.description,
+        date: new Date().toISOString().split('T')[0],
+        contributor_email: user.email,
+        contributor_name: user.full_name,
+      });
+
+      // 2. Update the goal's total amount
+      const updatedGoalData = {
+        current_amount: goal.current_amount + amount,
+      };
+
+      // 3. If it's a group goal, update the participant's contribution
+      if (goal.type === 'group') {
+        const updatedParticipants = goal.participants.map(p => {
+          if (p.email === user.email) {
+            return { ...p, contributed: (p.contributed || 0) + amount };
+          }
+          return p;
+        });
+        updatedGoalData.participants = updatedParticipants;
+      }
+
+      await Goal.update(goal.id, updatedGoalData);
+      
+      // Atualizar saldo atual do usuário (diminuir)
+      const currentBalance = user.current_balance || 0;
+      const newBalance = currentBalance - amount;
+      const historyEntry = {
+        date: new Date().toISOString(),
+        amount: -amount,
+        previous_balance: currentBalance,
+        new_balance: newBalance,
+        type: "goal_contribution",
+        description: `Contribuição: ${goal.name}`
+      };
+      await User.updateMe({
+        current_balance: newBalance,
+        balance_history: [...(user.balance_history || []), historyEntry]
+      });
+      
+      toast({
+        title: "Sucesso!",
+        description: "Sua contribuição foi registrada!",
+        className: "bg-green-100 text-green-800",
+      });
+      navigate(createPageUrl(`GoalDetail?id=${goal.id}`));
+    } catch (error) {
+      console.error("Erro ao salvar contribuição:", error);
+      toast({
+        title: "Erro",
+        description: "Não foi possível registrar a contribuição.",
+        variant: "destructive",
+      });
+    }
+    setIsLoading(false);
+  };
+  
+  if (!goal) return null;
+
+  return (
+    <div className="p-4 max-w-md mx-auto">
+      <div className="flex items-center gap-4 mb-6">
+        <Button variant="ghost" size="icon" onClick={() => navigate(-1)}>
+          <ArrowLeft className="w-5 h-5" />
+        </Button>
+        <div>
+          <h1 className="text-xl font-bold text-gray-800">Adicionar Contribuição</h1>
+          <p className="text-sm text-gray-600">Para a meta: {goal.name}</p>
+        </div>
+      </div>
+      <form onSubmit={handleSubmit} className="space-y-6">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2"><Coins/> Valor</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <Label htmlFor="amount">Valor da Contribuição (R$)</Label>
+              <Input id="amount" type="number" step="0.01" value={contribution.amount} onChange={(e) => handleInputChange("amount", e.target.value)} required />
+            </div>
+            <div>
+              <Label htmlFor="description">Descrição (opcional)</Label>
+              <Textarea id="description" placeholder="Ex: Economia do mês" value={contribution.description} onChange={(e) => handleInputChange("description", e.target.value)} />
+            </div>
+          </CardContent>
+        </Card>
+        <Button type="submit" disabled={isLoading || !contribution.amount} className="w-full h-12 bg-emerald-600 hover:bg-emerald-700">
+          {isLoading ? "Salvando..." : <><Save className="w-5 h-5 mr-2" />Salvar Contribuição</>}
+        </Button>
+      </form>
+    </div>
+  );
+}
